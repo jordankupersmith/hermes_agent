@@ -612,6 +612,19 @@ exercised — that also re-runs the seed-ISO YAML guard.)
 bash /usr/local/sbin/phase5/phase5_guardrail_test.sh
 ```
 
+The **helper** suites need no VM and no network; they live in `tests/` in this
+repo (offline HTTP mocks around the exact failure modes that were found live):
+
+```bash
+python3 tests/test_library_status.py   # request -> Radarr -> qBt -> disk -> Jellyfin verdicts
+python3 tests/test_bz.py               # Bazarr profile write contract (fix 65)
+python3 tests/test_jf.py               # Jellyfin endpoint probe / exits 2,5,7
+python3 tests/test_rd.py               # Radarr movieCategory vs silently-dropped category
+```
+
+Run them before changing a helper; they are the regression net for the day-2
+scripts, exactly as the guardrail is for apply/diag.
+
 > **Known stale assertions (pre-existing, not caused by fixes 24–34).** Four G10/G12 checks still
 > encode Round-1 behavior that Rounds 2–3 superseded:
 >
@@ -1977,6 +1990,17 @@ sync the credential first, then retry. Neither command prints the password:
 sudo bash library_status.sh "breakfast club" --fix-client-password
 sudo bash library_status.sh "breakfast club" --retry
 ```
+
+A **PUT that returns 400 is not a malformed body**: Radarr tests the client on
+save (`ProviderControllerBase.UpdateProvider`) and puts the validation failure
+in the response. The helper now prints that body, so `400 … Authentication
+Failure` means qBittorrent rejected the request before the password was even
+compared — check the block `qBittorrent WebUI auth settings`: with
+`HostHeaderValidation=true`, the `Host: gluetun:8080` header must be allowed by
+`WebUI\ServerDomains` (add `gluetun` to that list rather than switching
+validation off — the WebUI is VM-only, but the check is still worth keeping
+narrow). Our own helper logs in by sending `Host: localhost:8080`, which is why
+it succeeds where Radarr fails.
 
 Secrets stay put: `RADARR_API_KEY` from `/opt/media-assistant/.env`, the qBt
 password from `QB_PASS`/the container log, the Jellyfin token from

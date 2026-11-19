@@ -281,11 +281,15 @@ json.dump(c, open(sys.argv[2], "w"))
 open(sys.argv[3], "w").write("changed" if changed else "")
 PY
             if [ -s "$TMP/changed.$CID" ]; then
-                CODE="$(curl -sS -o /dev/null -w '%{http_code}' -m 30 -X PUT \
+                CODE="$(curl -sS -o "$TMP/put.$CID.json" -w '%{http_code}' -m 30 -X PUT \
                     -H "X-Api-Key: $RDK" -H 'Content-Type: application/json' \
                     --data @"$TMP/fixed.$CID.json" \
                     "$RD/api/v3/downloadclient/$CID")"
                 echo "  PUT downloadclient/$CID -> HTTP $CODE (202 = saved)"
+                if [ "$CODE" != "202" ]; then
+                    echo "  rejected; Radarr's body:"
+                    head -c 600 "$TMP/put.$CID.json" | sed 's/^/    /'; echo
+                fi
                 echo "  re-test after the change:"
                 test_all "$CID"
             else
@@ -302,11 +306,42 @@ for U in "http://gluetun:8080" "http://192.168.122.10:8080"; do
     echo "  from inside the radarr container: $U -> ${C:-(no answer / curl missing)}"
 done
 
+echo "== qBittorrent WebUI auth settings (read-only) =="
+QS="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+    'sudo grep -aE "HostHeaderValidation|ServerDomains|CSRFProtection|LocalHostAuth" /data/config/qbittorrent/qBittorrent.conf' \
+    2>/dev/null)"
+if [ -n "${QS:-}" ]; then
+    printf '%s\n' "$QS" | sed 's/^/  /'
+    case "$QS" in
+        *HostHeaderValidation=true*)
+            case "$QS" in
+                *ServerDomains=*)
+                    case "$QS" in
+                        *gluetun*|*ServerDomains=\**)
+                            echo "  hint: HostHeaderValidation is ON; 'gluetun' looks allowed" ;;
+                        *)
+                            echo "  hint: HostHeaderValidation is ON and ServerDomains does" \
+                                 "not list 'gluetun' — Radarr's Host: gluetun:8080" \
+                                 "would be rejected before the password is even checked" ;;
+                    esac ;;
+                *)
+                    echo "  hint: HostHeaderValidation is ON with no ServerDomains line" \
+                         "(built-in defaults apply, not 'gluetun')" ;;
+            esac ;;
+    esac
+else
+    echo "  (no explicit WebUI auth keys — qBittorrent built-in defaults apply)"
+fi
+
 # opt-in write: sync Radarr's client password with qBittorrent's CURRENT WebUI
 # credential (the temp one from the log unless QB_PASS is set). The secret is
 # written to a 0600 file inside the private mktemp dir and never printed or put
 # on a command line (argv is readable in /proc). Observed live: testall said
 # "Authentication Failure" while host/reachability were both correct.
+#
+# A PUT that answers 400 is NOT a malformed body: ProviderControllerBase tests
+# the client on save (unless ?forceSave=true) and returns the validation
+# failure in the body. The body is printed here for exactly that reason.
 if [ "${2:-}" = "--fix-client-password" ]; then
     echo "== fix: Radarr's qBittorrent password -> qBt's current WebUI credential =="
     PASS="${QB_PASS:-$(qbt_temp_password)}"
@@ -334,11 +369,15 @@ for f in c.get("fields") or []:
 json.dump(c, open(sys.argv[3], "w"))
 print("  #%s password field %s" % (c.get("id"), "set" if hit else "MISSING"))
 PY
-            CODE="$(curl -sS -o /dev/null -w '%{http_code}' -m 30 -X PUT \
+            CODE="$(curl -sS -o "$TMP/put.$CID.json" -w '%{http_code}' -m 30 -X PUT \
                 -H "X-Api-Key: $RDK" -H 'Content-Type: application/json' \
                 --data @"$TMP/pwfix.$CID.json" \
                 "$RD/api/v3/downloadclient/$CID")"
             echo "  PUT downloadclient/$CID -> HTTP $CODE (202 = saved)"
+            if [ "$CODE" != "202" ]; then
+                echo "  rejected; Radarr's body:"
+                head -c 600 "$TMP/put.$CID.json" | sed 's/^/    /'; echo
+            fi
             echo "  re-test after the change:"
             test_all "$CID"
         done < "$TMP/client_ids.txt"
