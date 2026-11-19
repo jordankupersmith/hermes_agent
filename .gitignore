@@ -1,0 +1,25 @@
+# Captured run output. These are transcripts of live applies/diags: they are
+# evidence, not source, and they can contain service output. Never publish them
+# without reading them first (see README.md "Before you publish").
+*.out
+*.log
+
+# Secrets — must never be committed. The real files live outside this tree
+# (/opt/media-assistant/.env, /opt/media-stack/vpn.env) and are root-only.
+vpn.env
+.env
+*.env
+!*.env.example
+
+# Keys / host material
+*.key
+*.pem
+id_ed25519*
+known_hosts
+
+# Python and editor noise
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.swp

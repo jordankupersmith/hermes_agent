@@ -1,0 +1,112 @@
+# =============================================================================
+# SystemBuild Phase 4 — Nous Hermes Agent configuration (host: clawbox)
+# =============================================================================
+# Canonical, reviewable source (do not hand-edit the installed copy — edit this,
+# then re-run phase4_apply.sh, which installs it verbatim):
+#   /home/jordan/Documents/SystemBuild/phase4_config.yaml
+# Installed to:
+#   /var/lib/hermes/config.yaml   (600 hermes:hermes)
+#     — Hermes resolves its config at $HERMES_HOME/config.yaml, and the systemd
+#       units pin HERMES_HOME=/var/lib/hermes (the repo does NOT honor a
+#       HERMES_CONFIG_PATH override; that name is reserved for its own
+#       subprocess env policy).
+#
+# SECRETS: NONE in this file. The single credential reference is resolved at
+# runtime:
+#   ${LITELLM_API_KEY}  ->  from /etc/hermes/hermes.env (600 hermes:hermes,
+#   loaded by both Phase 4 systemd units via EnvironmentFile=). Hermes
+#   resolves `${VAR}` form api_key references through the process environment
+#   (agent.secret_scope / hermes_cli.config.get_env_value at v0.23.0).
+#
+# LLM WIRING (provider: custom — the documented custom-endpoint flow of
+# hermes_cli/model_setup_flows_custom.py at v0.23.0 writes exactly these keys):
+#   base_url  http://127.0.0.1:4000/v1  — the Phase 3 LiteLLM proxy (loopback)
+#   api_mode  chat_completions          — LiteLLM speaks OpenAI chat-completions
+#   The fallback chain (glm-5.3-flash -> kimi-k2.7-code -> beam-free) stays in
+#   LiteLLM (phase3_config.yaml router_settings.fallbacks); Hermes points at
+#   ONE model and lets LiteLLM do the fallback routing. NO fallback_providers
+#   block is defined here — by construction.
+model:
+  default: glm-5.3-flash
+  provider: custom
+  base_url: http://127.0.0.1:4000/v1
+  api_key: ${LITELLM_API_KEY}
+  api_mode: chat_completions
+
+# TOOLSETS: standard defaults only (toolsets.py @ v0.23.0 — "hermes-cli" is
+# the default bundle: core tools + cronjob). API-server sessions automatically
+# get the hermes-api-server toolset (full agent tools, no interactive-UI
+# tools). web_search/web_extract ARE core tools, pinned via web.* below.
+#
+# INSTALL NOTE (single source of truth lives in phase4_apply.sh): the install
+# is `uv sync --locked --extra ddgs --extra sms` — [ddgs] pins this web
+# backend; [sms] is a SINGLE-DEP extra (aiohttp==3.14.5) that provides the
+# transport the api_server *adapter* imports (core has no aiohttp; the whole
+# messaging extras pull telegram/discord/slack instead, which we must NOT
+# install). The SMS channel adapter itself stays inert: platforms are
+# enabled by config/env, not by installed extras; only api_server is
+# configured below.
+toolsets:
+  - hermes-cli
+
+# WEB SEARCH PIN: ddgs everywhere, keyless vendor ring fully disabled.
+#   ddgs is a keyless backend — its only egress is DuckDuckGo
+#   (dependencies: the pinned extra `ddgs = ["ddgs==9.16.0"]` in
+#   /opt/hermes/src/pyproject.toml, installed into /opt/hermes/venv at apply).
+#   search_backend  -> ddgs for web_search
+#   extract_backend -> ddgs for web_extract (autodetection would otherwise
+#                      reach the keyless ring / other vendors)
+#   keyless_fallback: false  — disables the keyless round-robin ring
+#                       (exa/parallel/firecrawl/keenable free endpoints) that
+#                       would otherwise fire whenever no keyed backend answered
+#                       (agent/web_search_registry.py @ v0.23.0, step 4 of the
+#                       resolution ladder).
+#   keyless_rescue: false    — disables the one-shot keyless retry after a
+#                       failed keyed call (same chokepoint,
+#                       plugins/web/keyless_mcp @ v0.23.0).
+#   Result: THE ONLY external egress Hermes performs is DuckDuckGo, only on
+#   explicit web_search/web_extract tool calls.
+web:
+  search_backend: ddgs
+  extract_backend: ddgs
+  keyless_fallback: false
+  keyless_rescue: false
+
+# GATEWAY PLATFORMS: the api_server platform ONLY. With API_SERVER_KEY present
+# in the process env, gateway/config_env.py::_api_server @ v0.23.0 seeds
+# extra.key and treats the platform as connected -> the gateway runs exactly
+# one platform: the loopback OpenAI-compatible endpoint on 127.0.0.1:8642
+# (bind from API_SERVER_HOST / API_SERVER_PORT env set in the systemd unit).
+# No messaging platform (telegram/discord/slack/whatsapp/...) is configured
+# here or in the env file — the adapters stay lazy-extras and never install.
+# "No messaging platforms enabled." is an expected warning line in the
+# gateway journal (run_startup.py @ v0.23.0) — it is NOT an error.
+platforms:
+  api_server:
+    enabled: true
+
+# PLUGIN SUPPLY CHAIN: no plugin marketplace traffic. auto_update_check_hours
+# 0 disables the read-only plugin update check (which would contact
+# hermes-agent.nousresearch.com on a 24h tick); auto_apply was already
+# opt-in-only. The install itself is a pinned git checkout — never updated in
+# place by us; updates go through re-audit of a new tag.
+plugins:
+  auto_update_check_hours: 0
+  auto_apply: false
+
+# TELEMETRY: the units also export HERMES_DISABLE_TELEMETRY=1 (env-level
+# belt-and-braces — the only telemetry paths at v0.23.0 are Nous "shared
+# metrics", which are consent-gated, and this env var is their documented
+# kill switch; evals/postmortem probes use exactly that variable).
+# No config key needed here — nothing telemetry-related is enabled by config.
+
+# NOT CONFIGURED, deliberately (audit-verified defaults are safe/fail-closed):
+#   * dashboard.auth / dashboard.public_url — the 9119 surface IS the headless
+#     `hermes serve` backend (no web UI, no SPA). Loopback binds are exempt
+#     from the OAuth gate (web_server_boundary.should_require_auth @ v0.23.0),
+#     and Host-header DNS-rebinding middleware stays active. The browser UI
+#     was rejected for this deployment: web/ ships NO lockfile at v0.23.0, so
+#     its vite/bun build would pull unpinned transitive npm packages.
+#   * fallback_providers — stays empty; LiteLLM owns the fallback chain.
+#   * optional provider extras (anthropic/openrouter/bedrock/...) — not
+#     installed; provider: custom + base_url needs none of them.

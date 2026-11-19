@@ -1,0 +1,286 @@
+# =============================================================================
+# SystemBuild Phase 5 — media-vm Docker Compose spec (host: clawbox)
+# =============================================================================
+# Canonical, reviewable source (do NOT hand-edit the installed copy — edit
+# this, then re-run phase5_apply.sh, which pushes it verbatim into the VM):
+#   /home/jordan/Documents/SystemBuild/phase5_compose.yaml
+# Installed to (inside media-vm):
+#   /opt/media-stack/docker-compose.yml
+#
+# SECRETS: NONE in this file. Every VPN credential comes from
+#   /opt/media-stack/vpn.env (600, inside media-vm; on the host it lives at
+#   /etc/media-vm/vpn.env and phase5_apply.sh syncs it in) via gluetun's
+#   `env_file:`. The file stays comment-only (no real values) until the user
+#   adds provider credentials.
+#
+# START GATING (carried from the Phase 3/4 lesson — start-gate real secrets):
+#   * gluetun + qbittorrent are members of the `vpn` compose profile.
+#       docker compose up -d                -> ONLY the 7 clearnet apps start;
+#                                              the torrent path stays DOWN and
+#                                              unguarded-on-purpose until real
+#                                              VPN credentials exist in vpn.env.
+#       docker compose --profile vpn up -d  -> additionally gluetun + qbittorrent
+#                                              (requires real vpn.env values).
+#
+# TORRENT KILL SWITCH (3 layers, fail-closed) — 2026-11-09 external-review
+# wording fix: layer 3 is a BACKSTOP, not THE kill switch (peers can use any
+# port, so a 6881:6889 port deny is not isolation); layer 1 is the real L3
+# isolation:
+#   1. gluetun's netns firewall (FIREWALL=on + FIREWALL_OUTBOUND_SUBNETS below):
+#      everything in gluetun's netns may egress ONLY via the VPN tunnel.
+#   2. qbittorrent shares gluetun's netns entirely (network_mode:
+#      service:gluetun) — it has NO network of its own, no default route, no
+#      fallback path. qBittorrent.conf is pre-seeded (by phase5_apply.sh, in
+#      the correct qBt 5.x [BitTorrent] schema) with Session\Interface=tun0
+#      AND Session\InterfaceName=tun0 as defense in depth (app-level bind).
+#   3. BACKSTOP inside media-vm (written by phase5_apply.sh): DOCKER-USER +
+#      ufw DROP for 6881:6889/tcp+udp toward the clearnet NIC, plus a
+#      DOCKER-USER inbound source guard on all published ports — these only
+#      catch a container wrongly started OUTSIDE the tunnel; they are not the
+#      isolation mechanism itself.
+#
+# LAN EXPOSURE (audit decision; amended by fix 52 / Step 8, fix 57): Jellyfin
+#   faces the LAN via the host's systemd-socket-proxyd unit (192.168.1.133:8096
+#   -> 192.168.122.10:8096) plus a socat UDP 7359 discovery relay on the same
+#   LAN IP. fix 57 — the relay only reaches Jellyfin because the stack also
+#   publishes 7359/udp on the VM IP; before that the relay forwarded into a
+#   closed port and no LAN client could auto-discover the server. fix 52 adds
+#   the FAMILY REQUESTS UI: host Caddy terminates TLS
+#   on 192.168.1.133:8443 (internal CA "Family Media CA", LAN-subnet-only ufw
+#   row) and reverse-proxies to Jellyseerr at 192.168.122.10:5055. Every other
+#   port below is bound to 192.168.122.10 (the VM's libvirt-side address) —
+#   never 0.0.0.0 and never [::] — so the *arr/qBt admin UIs stay VM/host-only.
+#   NOTE: until the first admin account is created in Jellyfin's setup wizard,
+#   ANY LAN device can claim the server at 192.168.1.133:8096 — complete the
+#   wizard immediately after first apply.
+#
+# STORAGE (hardlink layout, identical paths inside every container):
+#   /data/torrents/{movies,music,tv}   qBittorrent download side
+#   /data/media/{movies,music,tv}      Radarr/Lidarr/Sonarr import side
+#   radarr/lidarr/sonarr mount the whole /data so download->import hardlinks
+#   are atomic (same fs, same path strings).
+#   fix 37 — PUID/PGID 1001 is a NUMERIC stack uid with NO passwd entry and NO
+#   sudo inside media-vm. jordan (uid 1000) is administration/login ONLY, so
+#   code execution as the stack uid is not one sudo away from root in the VM.
+#   fix 43 — on the HOST, uid 1001 is the unrelated 'hermes' account (phase 4);
+#   the raw media LV is never mounted on the host, so the namespaces stay apart.
+#
+# IMAGE PINS (supply-chain discipline; NO :latest anywhere):
+#   gluetun v3.40.0 | qbittorrent 5.0.4 | prowlarr 1.32.2 | radarr 5.20.2
+#   lidarr 2.9.6 | sonarr 4.0.11 | bazarr 1.5.6 | jellyfin 12.4 (official)
+#   jellyseerr 2.1.0
+#
+# PORT FORWARDING (fix 52): AirVPN forwards one static port (>= 2048) through
+#   the tunnel. gluetun opens it in its netns firewall
+#   (FIREWALL_VPN_INPUT_PORTS) and qBittorrent listens on it
+#   (TORRENTING_PORT + Session\Port in qBittorrent.conf). If AirVPN assigned a
+#   different port, change BOTH values here (and the in-VM Session\Port pin)
+#   in the same edit — never open a port you do not own.
+# =============================================================================
+
+name: media-stack
+
+services:
+  # ------------------------------------------------------------------ vpn ----
+  gluetun:
+    image: qmcgaw/gluetun:v3.40.0
+    container_name: gluetun
+    restart: unless-stopped
+    profiles: ["vpn"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - /opt/media-stack/vpn.env
+    environment:
+      # netns kill-switch: on = only VPN-tunnel egress (+ the two exceptions
+      # below). fail-closed: if the tunnel dies, ALL egress is dropped.
+      - FIREWALL=on
+      # let the host (192.168.122.1) reach the WebUI through the tunnel netns
+      - FIREWALL_OUTBOUND_SUBNETS=192.168.122.0/24
+      # allow inbound to the qBittorrent WebUI that rides this netns
+      - FIREWALL_INPUT_PORTS=8080
+      # fix 52 — AirVPN static port forwarding: the ONLY peer port the tunnel
+      # firewall accepts (qBittorrent listens on the same number below).
+      - FIREWALL_VPN_INPUT_PORTS=37686
+    ports:
+      # qBittorrent WebUI. Published ONLY on the VM's libvirt address — never
+      # reachable from the LAN (libvirt NAT stops everything not on virbr0).
+      - "192.168.122.10:8080:8080/tcp"
+    volumes:
+      - /data/config/gluetun:/gluetun
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:5.0.4
+    container_name: qbittorrent
+    restart: unless-stopped
+    profiles: ["vpn"]
+    # THE core isolation primitive: no own NIC, no own route, no own DNS —
+    # 100% of qbittorrent traffic lives and dies inside gluetun's netns.
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+      - WEBUI_PORT=8080
+      # fix 52 — single static AirVPN forwarded port (matches
+      # FIREWALL_VPN_INPUT_PORTS above and Session\Port in qBittorrent.conf)
+      - TORRENTING_PORT=37686
+    volumes:
+      - /data/config/qbittorrent:/config
+      - /data/torrents:/data/torrents
+
+  # ------------------------------------------------------------- clearnet ----
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:1.32.2
+    container_name: prowlarr
+    restart: unless-stopped
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+    ports:
+      - "192.168.122.10:9696:9696/tcp"
+    volumes:
+      - /data/config/prowlarr:/config
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:5.20.2
+    container_name: radarr
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+    ports:
+      - "192.168.122.10:7878:7878/tcp"
+    volumes:
+      - /data/config/radarr:/config
+      # whole /data mounted: atomic hardlink import torrent->media
+      - /data:/data
+
+  lidarr:
+    image: lscr.io/linuxserver/lidarr:2.9.6
+    container_name: lidarr
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+    ports:
+      - "192.168.122.10:8686:8686/tcp"
+    volumes:
+      - /data/config/lidarr:/config
+      - /data:/data
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:4.0.11
+    container_name: sonarr
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+    ports:
+      - "192.168.122.10:8989:8989/tcp"
+    volumes:
+      - /data/config/sonarr:/config
+      # CRITICAL (fix 52): mount the WHOLE /data — never /data/torrents and
+      # /data/media/tv as separate binds. Separate mount-table entries cross
+      # filesystems in Docker, turn the import into EXDEV and force a full
+      # copy instead of the instant hardlink Radarr/Lidarr get.
+      - /data:/data
+
+  bazarr:
+    # fix 60 — 1.5.1 -> 1.5.6. OpenSubtitles.com returns HTTP 426 ("Bad status
+    # code: 426") to any Bazarr client older than 1.5.4 — it is a VERSION GATE,
+    # not a credential/quota problem (OSC developer, bazarr issue #2121). Without
+    # this the only subtitle provider that matters for es-LA is permanently
+    # throttled and Bazarr looks "configured but silent".
+    image: lscr.io/linuxserver/bazarr:1.5.6
+    container_name: bazarr
+    restart: unless-stopped
+    depends_on:
+      - radarr
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+    ports:
+      - "192.168.122.10:6767:6767/tcp"
+    volumes:
+      - /data/config/bazarr:/config
+      # identical path mapping to radarr so external .srt subtitles land
+      # exactly where Radarr's media paths live (no PGS burn-in needed)
+      - /data/media:/data/media
+
+  jellyfin:
+    # fix 58 — 10.10.6 -> 12.4. Upstream jumped 10.11.x -> 12.0 (stable 2026-10)
+    # and the sideloaded Tizen build of record is compiled against jellyfin-web
+    # 12.z ("0.1.0 compiled 2026/11/06 @ 00h56 with Jellyfin-12.z"); a 10.10.6
+    # server + 12.z client fails every play request before PlaybackInfo. The
+    # 12.0 upgrade changes the DB irreversibly, so phase5_apply.sh takes a
+    # config tarball and steps 10.10.x -> 10.10.7 -> 12.4 (upstream guidance).
+    image: jellyfin/jellyfin:12.4
+    container_name: jellyfin
+    restart: unless-stopped
+    depends_on:
+      - radarr
+      - bazarr
+    environment:
+      - TZ=Etc/UTC
+      # fix 37 — same numeric stack uid as the *arr/qBt services: no passwd
+      # entry, no sudo. Keeps /data/config/jellyfin* writable without root.
+      - PUID=1001
+      - PGID=1001
+      # fix 20 — advertise the LAN-facing URL in SSDP/discovery responses.
+      # The host's 7359/udp socat relay forwards discovery beats, but without
+      # this the response advertises 192.168.122.10 (VM-internal, unreachable
+      # by LAN clients). The official jellyfin image maps JELLYFIN_* env vars
+      # into the network config.
+      - JELLYFIN_PublishedServerUrl=http://192.168.1.133:8096
+    ports:
+      # the ONLY service the LAN will see, via the host's socket-proxyd relay
+      - "192.168.122.10:8096:8096/tcp"
+      # fix 57 — Jellyfin's UDP discovery responder (7359/udp) must be
+      # published on the VM side, otherwise the host's socat relay forwards LAN
+      # broadcast probes into a CLOSED port (observed: ICMP port-unreachable on
+      # 192.168.122.10:7359, so no TV ever auto-discovered the server).
+      # Bound to the VM IP only; the LAN reaches it exclusively through the
+      # host relay on 192.168.1.133:7359 (ufw + systemd IPAddressAllow).
+      - "192.168.122.10:7359:7359/udp"
+    volumes:
+      - /data/config/jellyfin:/config
+      - /data/config/jellyfin-cache:/cache
+      - /data/media:/data/media
+
+  jellyseerr:
+    image: fallenbagel/jellyseerr:2.1.0
+    container_name: jellyseerr
+    restart: unless-stopped
+    # fix 52 — CRITICAL: fallenbagel/jellyseerr is an Alpine Node image without
+    # s6-overlay. It IGNORES PUID/PGID unless the container user is pinned, so
+    # without this line /data/config/jellyseerr (owned 1001:1001) is unwritable.
+    user: "1001:1001"
+    depends_on:
+      - jellyfin
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=Etc/UTC
+    ports:
+      # VM-only: the host Caddy TLS terminator on 192.168.1.133:8443 reaches
+      # this address; the LAN never talks to 5055 directly.
+      - "192.168.122.10:5055:5055/tcp"
+    volumes:
+      - /data/config/jellyseerr:/app/config

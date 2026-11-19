@@ -1,0 +1,123 @@
+# =============================================================================
+# SystemBuild Phase 3 — LiteLLM proxy configuration (host: clawbox)
+# =============================================================================
+# Canonical, reviewable source (do not edit the installed copy — edit this,
+# then re-run phase3_apply.sh, which installs it verbatim):
+#   /home/jordan/Documents/SystemBuild/phase3_config.yaml
+# Installed to:
+#   /etc/litellm/config.yaml   (640 root:litellm)
+#
+# SECRETS: NONE in this file. Every credential is an os.environ/<VAR>
+# reference, resolved at startup from /etc/litellm/litellm.env (600,
+# litellm:litellm — created in Phase 2, NEVER overwritten) via the systemd
+# unit's EnvironmentFile= directive:
+#   LITELLM_MASTER_KEY  local proxy auth — Phase 4 (Hermes Agent) sends this
+#                       as its API key to http://127.0.0.1:4000/v1
+#   ZEN_API_KEY         upstream OpenCode Go API key
+#
+# BIND: 127.0.0.1:4000 — LiteLLM takes host/port from CLI flags, not from
+# this file. The bind is pinned by the systemd unit ExecStart flags:
+#   --host 127.0.0.1 --port 4000
+# (phase3_apply.sh writes that unit; phase3_guardrail_test.sh verifies both.)
+#
+# UPSTREAM: OpenCode Go — an OpenAI-compatible endpoint:
+#   https://opencode.ai/zen/go/v1   (auth: ZEN_API_KEY bearer)
+#
+# -----------------------------------------------------------------------------
+# GUARDRAIL MECHANISM (model allowlist — how disallowed models are rejected):
+#   LiteLLM only routes requests whose "model" matches a model_name declared
+#   in model_list; the router rejects every other model name BEFORE any
+#   upstream call (HTTP 400, "model not found"-class error). This file makes
+#   that a strict allowlist BY CONSTRUCTION:
+#     * model_list is a CLOSED list — EXACTLY the 3 allowed models
+#       (glm-5.3-flash, kimi-k2.7-code, beam-free) and nothing else;
+#     * NO wildcard deployment ("*" or "openai/*") is defined — a wildcard
+#       would pass ANY model straight through to the upstream;
+#     * NO router_settings.model_group_alias and NO
+#       general_settings.infer_model_from_keys are set, so no aliasing or
+#       implicit model discovery can bypass the list.
+#   => gpt-*, claude-*, gemini-* and ANY other non-listed model are rejected.
+#   (If a database were ever attached, per-virtual-key "models" allowlists
+#   would add a second enforcement layer — unnecessary for this local proxy.)
+#
+# HEADER MECHANISM (required upstream identification headers):
+#   OpenCode Go requires THREE identification/routing headers on every
+#   request: User-Agent, X-Title, and x-opencode-session (a stable session
+#   ID — per the Go docs, clients must "Send a stable session ID in
+#   x-opencode-session for each conversation"; requests lacking it are
+#   rejected upstream with HTTP 400 "missing x-opencode-session", found in
+#   live debugging 2026-11-07). All three are set per-deployment in
+#   litellm_params.extra_headers (documented for the openai/ provider in
+#   the LiteLLM config.yaml docs), so every upstream request carries them:
+#     User-Agent:         clawbox-litellm-proxy/1.0
+#     X-Title:            clawbox-local-agent-stack
+#     x-opencode-session: clawbox-litellm-proxy-01
+#   NOTE: the session ID is a DEPLOYMENT-LEVEL stable ID — compliant and
+#   sufficient for this single-user local proxy. Phase 4 (Hermes) may
+#   revisit per-conversation session IDs (e.g. via a LiteLLM callback that
+#   forwards a client-supplied header).
+#
+# FALLBACK MECHANISM:
+#   router_settings.fallbacks defines the chain glm-5.3-flash ->
+#   kimi-k2.7-code -> beam-free (glm-5.3-flash falls back to
+#   kimi-k2.7-code then beam-free; kimi-k2.7-code falls back to beam-free,
+#   the free safety net with a 1M context window). router_settings is the canonical
+#   key for fallbacks in current LiteLLM; very old versions also accepted
+#   them under litellm_settings.
+# =============================================================================
+
+model_list:
+  # -- allowed model 1/3 (primary): glm-5.3-flash -----------------------------
+  - model_name: glm-5.3-flash
+    litellm_params:
+      model: openai/glm-5.3-flash         # openai/ => OpenAI-compatible client
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/ZEN_API_KEY
+      extra_headers:                      # sent on EVERY upstream request
+        User-Agent: clawbox-litellm-proxy/1.0
+        X-Title: clawbox-local-agent-stack
+        x-opencode-session: clawbox-litellm-proxy-01
+
+  # -- allowed model 2/3 (fallback 1): kimi-k2.7-code --------------------------
+  - model_name: kimi-k2.7-code
+    litellm_params:
+      model: openai/kimi-k2.7-code
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/ZEN_API_KEY
+      extra_headers:
+        User-Agent: clawbox-litellm-proxy/1.0
+        X-Title: clawbox-local-agent-stack
+        x-opencode-session: clawbox-litellm-proxy-01
+
+  # -- allowed model 3/3 (fallback 2 / free safety net): beam-free -------------
+  - model_name: beam-free
+    litellm_params:
+      model: openai/beam-free
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/ZEN_API_KEY
+      extra_headers:
+        User-Agent: clawbox-litellm-proxy/1.0
+        X-Title: clawbox-local-agent-stack
+        x-opencode-session: clawbox-litellm-proxy-01
+
+# Router behavior: the fallback chain + sane retry/timeout/cooldown defaults.
+router_settings:
+  # Fallback chain (in order): glm-5.3-flash -> kimi-k2.7-code -> beam-free
+  # (beam-free is the free safety net — no-cost fallback, 1M ctx window)
+  fallbacks:
+    - "glm-5.3-flash": ["kimi-k2.7-code", "beam-free"]
+    - "kimi-k2.7-code": ["beam-free"]
+  routing_strategy: simple-shuffle
+  num_retries: 2        # per-deployment retries before failing over
+  timeout: 300          # per-deployment timeout (seconds)
+  allowed_fails: 3      # fails before a deployment enters cooldown
+  cooldown_time: 30     # cooldown duration (seconds)
+
+# Module-level LiteLLM behavior.
+litellm_settings:
+  drop_params: true     # drop unsupported params instead of erroring
+  request_timeout: 300  # hard cap per LLM request (seconds)
+
+# Server/auth behavior.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
