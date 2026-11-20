@@ -46,7 +46,8 @@ Details: manual **Step 10** (10a–10i).
       `"syncLevel":"fullSync"`, and Radarr's indexer count becomes `1` (YTS).
 - [ ] **qBittorrent WebUI password** permanently set (10b), then the same
       credentials in Radarr's download client.
-- [ ] **qBt category** `radarr` → `/data/torrents/movies` (10c).
+- [ ] **qBt category** `radarr` → `/data/torrents/movies` **and** the manual-mode
+      path switch (10c).
       **Confirmed 2026-11-19:** the category exists but its `savePath` is
       **empty**, and Radarr already tags the torrent `cat=radarr` — so the name
       is right and the path falls back to the default `/data/torrents`.
@@ -59,6 +60,12 @@ Details: manual **Step 10** (10a–10i).
       (`createCategory` 409 → `editCategory` 200). Radarr's client field is
       **`movieCategory`**, not `category` — writing `category` returns HTTP 202
       and is silently ignored (verified against a schema-faithful mock).
+      **Still open (fix 69, 2026-11-20):** the path is not used at all until
+      `Session\UseCategoryPathsInManualMode` is on — Radarr's add is manual-mode
+      (category only, no `savepath`/`autoTMM`), and the switch defaults off, so
+      the torrent still landed in `/data/torrents`. Run
+      `sudo bash qbt_admin.sh --fix-category-paths` (live, no restart) and
+      confirm the next grab's `save_path`.
 - [ ] **End-to-end request** + hardlink proof (`n=2`, same inode) (10d).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL

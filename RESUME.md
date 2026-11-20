@@ -18,7 +18,8 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Guardrail | `VERIFY_FAILS=0`; fix-61 assertions added, mutation test **7/7** |
 | Repository | `git init -b main` done (commits `cc2e33d`, `db7c9bb`, `0e78996`, + fix 68); `tests/` holds the offline mock suites; **no remote yet**, license undecided |
 | Download client (fix 67) | **repaired 2026-11-20**: ban cleared by restart, then `PUT downloadclient/1 -> 202` and `testall isValid=True` |
-| *The Breakfast Club* (radarrId 3) | parked queue row deleted (`DELETE queue/1259668804 -> 200`), `MoviesSearch -> 201`; **re-run `library_status.sh` to see it download** |
+| *The Breakfast Club* (radarrId 3) | **downloading** (grabbed 08:25Z, `cat=radarr`); `save_path=/data/torrents` because manual-mode category paths were off — run `qbt_admin.sh --fix-category-paths` for future adds (fix 69) |
+| qBt category paths (fix 69) | **need enabling**: `Session\UseCategoryPathsInManualMode=false` by default, so `radarr` → `/data/torrents/movies` is ignored; `sudo bash qbt_admin.sh --fix-category-paths` |
 
 ## Done 2026-11-19 (scripted — manual 10j)
 
@@ -36,10 +37,14 @@ sudo bash bazarr_policy.sh --apply                                      # 4 rows
 **Status as of 2026-11-19 (status run):** login OK via the first-run temporary
 password; the film's torrent was `uploading`, `cat=radarr`, `save_path=/data/torrents`,
 `40.2 GiB`; `/data` was 72G/89G used, 13G free. The `radarr` category **existed
-with an empty `savePath`**, which is why the torrent sat in `/data/torrents`
-despite carrying the right category. Setting the path then deleting the torrent
-with data brought `/data` to **32G used / 53G free (38%)** with no Radarr queue
-entry to re-grab it.
+with an empty `savePath`**, and — see fix 69 — **even a correct path would not
+have been used**: Radarr sends only a category, qBittorrent files such an add in
+manual mode, and manual mode ignores the category path unless
+`Session\UseCategoryPathsInManualMode` is on (default off). That is why the
+torrent sat in `/data/torrents`; hardlinks were never affected (`/data` is one
+filesystem). Setting the path then deleting the torrent with data brought
+`/data` to **32G used / 53G free (38%)** with no Radarr queue entry to re-grab
+it.
 
 **Remaining (optional, fix 66): the upgrade task will not convert HI → non-HI.**
 It was run on 2026-11-19 (job #33 `completed`, progress `Project Hail Mary`,
@@ -71,9 +76,11 @@ back to the hostname when the setting is blank.
 /data/torrents/Project.Hail.Mary…-BTM/…mkv`). Removing that torrent **with
 data** returned the space instantly: `/data` 72G used / 13G free → **32G / 53G
 free (38%)**. The torrent sat directly under `/data/torrents/` because the
-`radarr` category's `savePath` was empty; that is fixed now, so new torrents go
-to `torrents/movies/`. Never delete from `/data/media/…` (that is the file you
-built).
+`radarr` category's `savePath` was empty — and, as fix 69 later proved, **a
+correct path would still have been ignored** in qBittorrent's manual torrent
+mode. New torrents reach `torrents/movies/` only after
+`qbt_admin.sh --fix-category-paths`. Never delete from `/data/media/…` (that is
+the file you built).
 
 **2. Full library scan — DONE.** `jellyfin_admin.sh --scan` (`POST
 /Library/Refresh` → 204) ran after the remux and the task returned to `Idle`.

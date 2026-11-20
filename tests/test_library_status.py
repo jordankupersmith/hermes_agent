@@ -84,6 +84,7 @@ QUEUE_DL = {"records": [{
 TORRENT = [{"name": "The.Breakfast.Club.1985.1080p.BluRay", "state": "downloading",
             "progress": 0.6, "size": 15_000_000_000, "category": "radarr",
             "save_path": "/data/torrents/movies", "eta": 1293}]
+TORRENT_OLD = [dict(TORRENT[0], save_path="/data/torrents")]
 VM_FILE = {"base": "http://192.168.122.10:8096",
            "files": [{"path": "/data/media/movies/The Breakfast Club (1985)/"
                               "The Breakfast Club (1985) Bluray-1080p.mkv",
@@ -158,6 +159,38 @@ check("still says STUCK", "STUCK" in r.stdout)
 check("does not repeat the password advice",
       "--fix-client-password" not in r.stdout, r.stdout)
 check("points at --retry", "--retry" in r.stdout)
+
+print("\n== qBt path policy block ==")
+PREFS_OFF = {"save_path": "/data/torrents",
+             "use_category_paths_in_manual_mode": False}
+CATS = {"radarr": {"name": "radarr", "savePath": "/data/torrents/movies"}}
+d = tempfile.mkdtemp()
+r = run(block("use_category_paths_in_manual_mode"),
+        [write_json(d, "p.json", PREFS_OFF),
+         write_json(d, "c.json", CATS),
+         write_json(d, "t.json", TORRENT_OLD)])
+check("prints the setting", "category paths in manual mode: False" in r.stdout)
+check("prints the category path", "/data/torrents/movies" in r.stdout)
+check("says the category path is ignored",
+      "category savePath is ignored" in r.stdout, r.stdout)
+check("names the fix", "--fix-category-paths" in r.stdout)
+
+d = tempfile.mkdtemp()
+r = run(block("use_category_paths_in_manual_mode"),
+        [write_json(d, "p.json", dict(PREFS_OFF,
+                                      use_category_paths_in_manual_mode=True)),
+         write_json(d, "c.json", CATS),
+         write_json(d, "t.json", TORRENT)])
+check("no warning when the path matches", "NOTE:" not in r.stdout, r.stdout)
+
+d = tempfile.mkdtemp()
+r = run(block("use_category_paths_in_manual_mode"),
+        [write_json(d, "p.json", dict(PREFS_OFF,
+                                      use_category_paths_in_manual_mode=True)),
+         write_json(d, "c.json", CATS),
+         write_json(d, "t.json", TORRENT_OLD)])
+check("flags a torrent outside its category path",
+      "not its category path" in r.stdout, r.stdout)
 
 print("\n== verdict: downloading ==")
 d = tempfile.mkdtemp()

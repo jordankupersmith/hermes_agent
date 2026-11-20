@@ -1397,12 +1397,30 @@ qBittorrent left sidebar → **Categories**:
   folder must live under `/data/torrents` as well. Everything is on the one ext4
   volume — that is what makes hardlinks possible.
 
+**Then turn category paths on for manual-mode torrents (fix 69).** Radarr sends
+only a category, no save path, so qBittorrent files the torrent in *manual* mode
+— and in that mode the category path is ignored unless
+`Session\UseCategoryPathsInManualMode` is true (default false). Skip this and
+`torrents/movies/` stays empty while everything lands in `/data/torrents`
+(still hardlinkable, just not where the layout says):
+
+```bash
+sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
+sudo bash qbt_admin.sh --fix-category-paths
+```
+
+`--fix-category-paths` is idempotent, applies the preference live (no restart)
+and verifies it by reading it back; it exits 2 if a category still has no
+`savePath`. It affects **new** adds only.
+
 ### 10d. End-to-end test + hardlink proof
 
 1. Request one small, popular, well-seeded movie in Jellyseerr.
 2. Radarr → *Activity → Queue*: appears within ~10 s, then *Downloading*.
 3. qBittorrent: torrent present with category `radarr` and save path
-   `/data/torrents/movies`.
+   `/data/torrents/movies` (with `--fix-category-paths` applied; a torrent added
+   before that keeps the old `/data/torrents` location — harmless, still the same
+   filesystem).
 4. On completion Radarr shows **Imported** and the file exists under
    `/data/media/movies`.
 
@@ -1803,12 +1821,15 @@ and **2** if no key exists at all — no tracebacks in any of those paths.
 **j3. qBt category (10c) — stop the "where did my torrent go" moment.** Observed
 2026-11-19: the `radarr` category **already existed with an empty `savePath`**,
 and Radarr already tagged the torrent `cat=radarr`. That is the misleading half
-of the bug — the category name is right, but an empty save path falls back to
-the default `/data/torrents`, so `torrents/movies/` stays empty:
+of the bug — the category name is right, but **the category path is not used at
+all** unless qBittorrent is told to use it (see the 2026-11-20 note below), so
+`torrents/movies/` stays empty and the torrent lands in the default
+`/data/torrents`:
 
 ```bash
 sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
 sudo bash qbt_admin.sh --set-radarr-category radarr
+sudo bash qbt_admin.sh --fix-category-paths      # required — see below
 ```
 
 `createCategory` answers **409** when the name exists and does **not** update the
@@ -1816,6 +1837,20 @@ path, so the helper also calls `editCategory` (qBittorrent ≥ 4.5.0) and then
 fails loudly if the stored `savePath` still does not match. On a build older
 than 4.5.0 `editCategory` 404s and the GUI is the only way (*qBt → Categories →
 edit*).
+
+**2026-11-20 (fix 69): setting the path is necessary but not sufficient.**
+Radarr adds a torrent with `category` and neither `savepath` nor `autoTMM`, so
+qBittorrent runs it in **manual** torrent-management mode. In that mode the
+category `savePath` is consulted **only** when
+`Session\UseCategoryPathsInManualMode` is true, and it defaults to **false**
+(`sessionimpl.cpp`); `Session\DisableAutoTMMByDefault` defaults to **true**, so
+even a freshly created category with a correct path had no effect. The live
+evidence was `save_path=/data/torrents` on a torrent whose category was
+`radarr` → `/data/torrents/movies`. `--fix-category-paths` sets the preference
+through `POST /api/v2/app/setPreferences` (**applied live**, 200, no restart;
+it affects new adds only, so an in-flight torrent keeps its location).
+"Empty savePath" alone was never the whole explanation — the path was ignored
+either way.
 
 The second command writes Radarr's qBittorrent download-client **`movieCategory`**
 field (GET → modify → PUT → GET) and prints the value back. **The field is not
@@ -2044,7 +2079,7 @@ password from `QB_PASS`/the container log, the Jellyfin token from
 | --- | --- |
 | Reclaim | qBittorrent → torrent → *Remove* → tick *delete files* |
 | Scan | Dashboard → Scheduled Tasks → *Scan Media Library* → ▶ |
-| Category | qBt → *Categories* → add `radarr` → `/data/torrents/movies`; Radarr → Settings → Download Clients → qBittorrent → *Category* |
+| Category | qBt → *Categories* → add `radarr` → `/data/torrents/movies`; Radarr → Settings → Download Clients → qBittorrent → *Category*; then `qbt_admin.sh --fix-category-paths` (fix 69) |
 | Subtitles | Bazarr → Settings → Languages → profile rows + *Cutoff* radio |
 | Server name | Dashboard → General → *Server Name* → **Family Media** → Save |
 

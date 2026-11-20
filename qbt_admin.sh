@@ -7,6 +7,7 @@
 #   sudo bash qbt_admin.sh --remove-torrent "Project.Hail.Mary" [--yes]
 #   sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
 #   sudo bash qbt_admin.sh --set-radarr-category radarr
+#   sudo bash qbt_admin.sh --fix-category-paths
 #
 # Why a Host header: qBittorrent validates the Host header and CSRF Referer, so
 # a plain request to 192.168.122.10:8080 is rejected even with the right
@@ -23,7 +24,8 @@ QB="http://192.168.122.10:8080"
 RD="http://192.168.122.10:7878"
 ENVF=/opt/media-assistant/.env
 JAR="$(mktemp)"
-trap 'rm -f "$JAR"' EXIT
+TMP="$(mktemp -d)"
+trap 'rm -f "$JAR"; rm -rf "$TMP"' EXIT
 K=(-i /etc/media-vm/deploy_ed25519 -o IdentitiesOnly=yes
    -o UserKnownHostsFile=/etc/media-vm/known_hosts)
 VM=jordan@192.168.122.10
@@ -75,6 +77,18 @@ rdk() { grep -m1 '^RADARR_API_KEY=' "$ENVF" 2>/dev/null | cut -d= -f2-; }
 cmd_status() {
     echo "== qBittorrent =="
     qb_login
+    echo "== path mode =="
+    qb /api/v2/app/preferences | python3 -c '
+import json,sys
+try: p=json.load(sys.stdin)
+except Exception: print("  (unparseable)"); raise SystemExit
+print("  default save path            : %s" % p.get("save_path"))
+print("  category paths in manual mode: %s" % p.get("use_category_paths_in_manual_mode"))
+if not p.get("use_category_paths_in_manual_mode"):
+    print("  NOTE: *arr adds carry a category but no savepath/autoTMM, so with")
+    print("  this OFF the category savePath is ignored and everything lands in")
+    print("  the default path. Fix: sudo bash qbt_admin.sh --fix-category-paths")
+'
     echo "== categories =="
     qb /api/v2/torrents/categories | python3 -c '
 import json,sys
@@ -218,6 +232,91 @@ print("  verify: OK — new grabs land in %s" % want)
 '
 }
 
+cmd_category_paths() {
+    # qBittorrent 5 finishes an API add in MANUAL torrent-management mode:
+    # Radarr sends `category` but neither `savepath` nor `autoTMM`
+    # (QBittorrentProxyV2.AddTorrentDownloadFormParameters), so sessionimpl.cpp
+    # computes useAutoTMM=false and takes the SESSION save path. The category
+    # savePath is only consulted when Session\UseCategoryPathsInManualMode is
+    # true — default false. Observed live 2026-11-20: cat=radarr, torrent at
+    # /data/torrents instead of the category's /data/torrents/movies (fix 69).
+    #
+    # The preference is applied LIVE by /api/v2/app/setPreferences
+    # (appcontroller.cpp -> Session::setUseCategoryPathsInManualMode); no
+    # restart, and existing torrents keep their current location.
+    qb_login
+    qb /api/v2/app/preferences      > "$TMP/prefs.json" 2>/dev/null || echo '{}' > "$TMP/prefs.json"
+    qb /api/v2/torrents/categories  > "$TMP/cats.json"  2>/dev/null || echo '{}' > "$TMP/cats.json"
+
+    cat > "$TMP/catpaths.py" <<'PY'
+import json, sys
+
+mode = sys.argv[1]
+
+def load(p, default):
+    try:
+        return json.load(open(p))
+    except Exception:
+        return default
+
+prefs = load(sys.argv[2], {})
+cats  = load(sys.argv[3], {})
+on    = bool(prefs.get("use_category_paths_in_manual_mode"))
+base  = (prefs.get("save_path") or "?").rstrip("/")
+
+print("  default save path             : %s" % base)
+print("  category paths in manual mode : %s" % on)
+missing = []
+for name, c in sorted((cats or {}).items()):
+    sp = ((c or {}).get("savePath") or "").rstrip("/")
+    if sp:
+        print("  %-10s -> %s" % (name, sp))
+    else:
+        missing.append(name)
+        print("  %-10s -> (empty: implicit %s/%s)" % (name, base, name))
+
+if mode == "check":
+    if on:
+        print("  nothing to do — new *arr adds already use their category path")
+        if missing:
+            print("  but these categories have no savePath: %s" % ", ".join(missing))
+            raise SystemExit(2)
+        raise SystemExit(0)
+    print("  Radarr/Sonarr send a category but no savepath/autoTMM, so with this")
+    print("  OFF every *arr download lands in %s, ignoring the category path." % base)
+    raise SystemExit(10)
+
+if not on:
+    print("  MISMATCH — the preference did not persist"); raise SystemExit(3)
+if not cats:
+    print("  NOTE: no categories defined yet, so nothing will use a path")
+    raise SystemExit(0)
+if missing:
+    print("  WARNING: no savePath for %s — set one with"
+          " --create-category <name> <path>" % ", ".join(missing))
+    raise SystemExit(2)
+print("  verify: OK — the next add lands in its category path")
+PY
+
+    echo "== current =="
+    python3 "$TMP/catpaths.py" check "$TMP/prefs.json" "$TMP/cats.json"
+    local rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    [ "$rc" -eq 10 ] || return "$rc"
+
+    echo "== enabling category paths in manual mode =="
+    local code
+    code="$(qb /api/v2/app/setPreferences \
+        --data-urlencode 'json={"use_category_paths_in_manual_mode":true}' \
+        -o /dev/null -w '%{http_code}')"
+    echo "  POST app/setPreferences -> HTTP $code (200 = applied live)"
+    [ "$code" = "200" ] || { echo "  rejected — nothing changed"; return 5; }
+
+    qb /api/v2/app/preferences > "$TMP/prefs.json" 2>/dev/null
+    echo "== after =="
+    python3 "$TMP/catpaths.py" verify "$TMP/prefs.json" "$TMP/cats.json"
+}
+
 cmd_radarr_category() {
     local cat="$1" key
     key="$(rdk)"; [ -n "$key" ] || die "no RADARR_API_KEY in $ENVF"
@@ -296,5 +395,6 @@ case "${1:-}" in
                          cmd_category "$2" "$3" ;;
     --set-radarr-category) [ $# -ge 2 ] || die "usage: --set-radarr-category <name>"
                          cmd_radarr_category "$2" ;;
+    --fix-category-paths) cmd_category_paths ;;
     *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

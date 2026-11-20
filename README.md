@@ -96,7 +96,7 @@ sudo bash check_normalize.sh                 # normalizer units + live stream co
 ```bash
 # offline helper suites
 python3 tests/test_library_status.py
-python3 tests/test_bz.py && python3 tests/test_jf.py && python3 tests/test_rd.py
+python3 tests/test_bz.py && python3 tests/test_jf.py && python3 tests/test_rd.py && python3 tests/test_qbt.py
 
 # the mandatory change protocol (AGENTS.md Rule 3)
 bash -n phase5_apply.sh phase5_diag.sh phase5_guardrail_test.sh

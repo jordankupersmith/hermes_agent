@@ -224,6 +224,51 @@ for t in hits:
     print("    save_path=%s" % (t.get("save_path") or "-"))
 PY
 
+# ---- 3a. qBittorrent path policy: a category path is NOT used by default ---
+# Radarr adds with `category` only (no savepath, no autoTMM), and qBittorrent
+# then runs the torrent in manual mode, where Session\UseCategoryPathsInManualMode
+# (default false) decides between the category path and the session save path.
+# Observed live 2026-11-20: cat=radarr, save_path=/data/torrents.
+echo "== qBittorrent categories / save paths (read-only) =="
+qb /api/v2/app/preferences     > "$TMP/qbprefs.json" 2>/dev/null || echo '{}' > "$TMP/qbprefs.json"
+qb /api/v2/torrents/categories > "$TMP/qbcats.json"  2>/dev/null || echo '{}' > "$TMP/qbcats.json"
+python3 - "$TMP/qbprefs.json" "$TMP/qbcats.json" "$TMP/torrents.json" <<'PY'
+import json, sys
+
+def load(p, default):
+    try: return json.load(open(p))
+    except Exception: return default
+
+prefs = load(sys.argv[1], {})
+cats  = load(sys.argv[2], {})
+tors  = load(sys.argv[3], [])
+base  = (prefs.get("save_path") or "?").rstrip("/")
+on    = bool(prefs.get("use_category_paths_in_manual_mode"))
+
+print("  default save path: %s" % base)
+print("  category paths in manual mode: %s" % on)
+for name, c in sorted((cats or {}).items()):
+    sp = ((c or {}).get("savePath") or "").rstrip("/")
+    print("  %-10s -> %s" % (name, sp or "(empty: implicit %s/%s)" % (base, name)))
+
+if not on:
+    print("  qBittorrent keeps *arr adds in manual torrent-management mode, and")
+    print("  with this OFF the category savePath is ignored: every add lands in")
+    print("  %s. Hardlinks still work (same filesystem); fix the layout with" % base)
+    print("  sudo bash qbt_admin.sh --fix-category-paths   (fix 69)")
+else:
+    for t in tors:
+        cat = (t.get("category") or "").strip()
+        if not cat:
+            continue
+        want = ((cats.get(cat) or {}).get("savePath") or "").rstrip("/")
+        got = (t.get("save_path") or "").rstrip("/")
+        if want and got and got != want:
+            print("  NOTE: %r is in %s, not its category path %s"
+                  % ((t.get("name") or "")[:48], got, want))
+            print("  (added before the path mode was enabled — imports still hardlink)")
+PY
+
 # ---- 3b. Radarr -> download client: why is a queued grab stuck? -----------
 echo "== Radarr -> download client =="
 rd /api/v3/downloadclient > "$TMP/clients.json" 2>/dev/null || echo '[]' > "$TMP/clients.json"
