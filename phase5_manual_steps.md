@@ -1372,6 +1372,15 @@ command line (`/proc/<pid>/cmdline` is readable). If the temporary password line
 is gone, the flag exits **4** — set a permanent password in the UI first, then
 `export QB_PASS=...` for the run (or update Radarr's entry by hand).
 
+**A ban looks like a wrong password (fix 67).** qBittorrent bans a **source IP**
+for an hour after five failed logins (defaults `MaxAuthenticationFailCount=5`,
+`BanDuration=3600s`) and keeps the ban map **in memory**. Every login during the
+ban answers 403 *"Your IP address has been banned…"*, which Radarr shows as a
+plain `Authentication Failure` — and because Radarr retries on each queue
+refresh, its container IP stays banned while a host-side helper logs in fine.
+Clear it by restarting the container (`sudo bash library_status.sh "title"
+--fix-qbt-auth`), then sync the credential and retry.
+
 ### 10c. Categories and hardlink layout
 
 qBittorrent left sidebar → **Categories**:
@@ -1981,26 +1990,33 @@ deletes only that movie's `downloadClientUnavailable` queue rows with
 nothing is blocklisted) and posts `MoviesSearch`. Re-run the plain command to
 watch it change from `STUCK` to `NOT YET … downloading`.
 
-**If `testall` says `isValid=false` / `Authentication Failure`** (the live cause
-on 2026-11-19: host correct, reachability 200, only the credential stale — qBt
-was still on the first-run temporary password while Radarr held an older one),
-sync the credential first, then retry. Neither command prints the password:
+**If `testall` says `isValid=false` / `Authentication Failure`** the password is
+not necessarily wrong. qBittorrent **bans a source IP for one hour after five
+failed logins** (`MaxAuthenticationFailCount=5`, `BanDuration=3600s`), and the
+ban map is **in memory only** (`src/webui/api/authcontroller.cpp`,
+`AuthController::isBanned`). Every login during a ban answers 403 *"Your IP
+address has been banned…"*, which Radarr reports as a plain
+`Authentication Failure`. Radarr retries on each queue refresh, so its
+**container** IP stays banned while this helper — connecting from the host —
+keeps logging in fine. That asymmetry is the tell.
+
+Sequence (each step re-tests; nothing prints the password):
 
 ```bash
-sudo bash library_status.sh "breakfast club" --fix-client-password
-sudo bash library_status.sh "breakfast club" --retry
+sudo bash library_status.sh "breakfast club" --fix-qbt-auth        # restart qBt: clears the ban map
+sudo bash library_status.sh "breakfast club" --fix-client-password # save qBt's current credential
+sudo bash library_status.sh "breakfast club" --retry               # drop the parked grab, search
 ```
 
 A **PUT that returns 400 is not a malformed body**: Radarr tests the client on
-save (`ProviderControllerBase.UpdateProvider`) and puts the validation failure
-in the response. The helper now prints that body, so `400 … Authentication
-Failure` means qBittorrent rejected the request before the password was even
-compared — check the block `qBittorrent WebUI auth settings`: with
-`HostHeaderValidation=true`, the `Host: gluetun:8080` header must be allowed by
-`WebUI\ServerDomains` (add `gluetun` to that list rather than switching
-validation off — the WebUI is VM-only, but the check is still worth keeping
-narrow). Our own helper logs in by sending `Host: localhost:8080`, which is why
-it succeeds where Radarr fails.
+save (`ProviderControllerBase.UpdateProvider`) and returns the validation
+failure in the body; the helper now prints it. If that body is again
+`Authentication Failure` *while the ban is active*, the same ban explains it —
+which is why the restart comes first. Host header validation is **not** the
+cause in this deployment: with no explicit keys qBittorrent uses
+`ServerDomains=*` (any host) and `CSRFProtection` explicitly allows requests
+that carry no `Origin`/`Referer` (`isCrossSiteRequest`). Keep those settings
+alone.
 
 Secrets stay put: `RADARR_API_KEY` from `/opt/media-assistant/.env`, the qBt
 password from `QB_PASS`/the container log, the Jellyfin token from

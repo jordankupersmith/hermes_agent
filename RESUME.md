@@ -16,6 +16,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Media normalizer (fix 59+61) | **installed + applied**; `timer` + `path` **active**; first good run `22:59:52Z` |
 | Disk | `/data` **32 G used, 53 G free (38%)** — the 41 GiB torrent copy was removed with its data |
 | Guardrail | `VERIFY_FAILS=0`; fix-61 assertions added, mutation test **7/7** |
+| Repository | `git init -b main` done (commits `cc2e33d`, `db7c9bb`); `tests/` holds the offline mock suites; **no remote yet**, license undecided |
 
 ## Done 2026-11-19 (scripted — manual 10j)
 

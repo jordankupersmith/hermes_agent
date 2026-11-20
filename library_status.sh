@@ -11,6 +11,8 @@
 #   sudo bash library_status.sh "breakfast club" --fix-client-password
 #        (copies qBt's CURRENT WebUI password into Radarr's client entry; the
 #         secret is never printed and the run re-tests with /testall)
+#   sudo bash library_status.sh "breakfast club" --fix-qbt-auth
+#        (restarts qBittorrent to clear its in-memory login-ban list)
 #   sudo bash library_status.sh "breakfast club" --retry
 #        (drops a parked downloadClientUnavailable queue entry, then searches;
 #         refuses unless every download client passes Radarr's own test)
@@ -312,25 +314,32 @@ QS="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
     2>/dev/null)"
 if [ -n "${QS:-}" ]; then
     printf '%s\n' "$QS" | sed 's/^/  /'
-    case "$QS" in
-        *HostHeaderValidation=true*)
-            case "$QS" in
-                *ServerDomains=*)
-                    case "$QS" in
-                        *gluetun*|*ServerDomains=\**)
-                            echo "  hint: HostHeaderValidation is ON; 'gluetun' looks allowed" ;;
-                        *)
-                            echo "  hint: HostHeaderValidation is ON and ServerDomains does" \
-                                 "not list 'gluetun' — Radarr's Host: gluetun:8080" \
-                                 "would be rejected before the password is even checked" ;;
-                    esac ;;
-                *)
-                    echo "  hint: HostHeaderValidation is ON with no ServerDomains line" \
-                         "(built-in defaults apply, not 'gluetun')" ;;
-            esac ;;
-    esac
 else
-    echo "  (no explicit WebUI auth keys — qBittorrent built-in defaults apply)"
+    echo "  (no explicit WebUI auth keys — qBittorrent defaults apply:"
+    echo "   HostHeaderValidation=on, ServerDomains='*', CSRFProtection=on,"
+    echo "   MaxAuthenticationFailCount=5, BanDuration=3600s)"
+fi
+
+echo "== qBittorrent login failures / bans (last 5) =="
+QL="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+    'sudo docker logs --tail 400 qbittorrent 2>&1 | grep -aiE "login failure|banned" | tail -5' \
+    2>/dev/null)"
+if [ -n "${QL:-}" ]; then
+    printf '%s\n' "$QL" | cut -c1-260 | sed 's/^/  /'
+    echo "  (a ban is per source IP and IN MEMORY only: 5 failures -> 1h,"
+    echo "   cleared by restarting the container — see --fix-qbt-auth)"
+else
+    echo "  none in the recent container log"
+fi
+
+echo "== Radarr log about the download client (last 5) =="
+RL="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+    'sudo docker logs --tail 300 radarr 2>&1 | grep -aiE "qBittorrent|download client" | tail -5' \
+    2>/dev/null)"
+if [ -n "${RL:-}" ]; then
+    printf '%s\n' "$RL" | cut -c1-260 | sed 's/^/  /'
+else
+    echo "  none in the recent container log"
 fi
 
 # opt-in write: sync Radarr's client password with qBittorrent's CURRENT WebUI
@@ -383,6 +392,34 @@ PY
         done < "$TMP/client_ids.txt"
     fi
     rm -f "$TMP/secret"
+fi
+
+# opt-in action: restart qBittorrent to clear its IN-MEMORY login-ban list.
+# qBittorrent bans a source IP for BanDuration (default 3600 s) after
+# MaxAuthenticationFailCount (default 5) failures. The ban map lives only in
+# memory (src/webui/api/authcontroller.cpp -> AuthController::isBanned), so a
+# restart clears it. Radarr is the source of the repeated failures, and every
+# login during a ban answers 403 "Your IP address has been banned…", which
+# Radarr reports as a plain "Authentication Failure" — indistinguishable from a
+# wrong password until the qBittorrent log line is read (printed above).
+if [ "${2:-}" = "--fix-qbt-auth" ]; then
+    echo "== restarting qBittorrent to clear the login-ban list =="
+    if ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+        'sudo docker restart qbittorrent >/dev/null && echo "  container restarted"' 2>/dev/null; then
+        :
+    else
+        echo "  restart failed — check the container"; exit 5
+    fi
+    C=""
+    for _ in $(seq 1 60); do
+        C="$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://192.168.122.10:8080/ 2>/dev/null)"
+        [ "$C" = "200" ] && break
+        sleep 1
+    done
+    echo "  WebUI after restart: HTTP ${C:-(no answer)}"
+    echo "  saved-client test after the restart:"
+    test_all
+    echo "  if it is still invalid: --fix-client-password, then --retry"
 fi
 
 # opt-in write: clear the parked queue entry and ask Radarr to search again.
@@ -628,9 +665,12 @@ elif qq:
               % (x.get("status"), pct))
         if x.get("errorMessage"):
             print("  Radarr says: %s" % x.get("errorMessage"))
-        print("  See the 'Radarr -> download client' block above: the host must")
-        print("  be the compose name 'gluetun' (not 192.168.122.10) and the")
-        print("  password must match qBittorrent's current WebUI password.")
+        print("  Read the diagnosis above: the download-client host/port,")
+        print("  Radarr's own testall verdict, and qBittorrent's login-failure")
+        print("  lines. A source IP banned after repeated failures answers 403")
+        print("  and Radarr reports it as 'Authentication Failure' — restart")
+        print("  qBt with --fix-qbt-auth; a real mismatch needs")
+        print("  --fix-client-password. Either way finish with --retry.")
     else:
         print("  NOT YET — Radarr is still working on %s: %s / %s, %.1f%%, eta %s"
               % (title, x.get("status"), x.get("trackedDownloadState") or "-",

@@ -129,7 +129,8 @@ r = run(block("has_file = bool"),
         {"TERM_IN": "breakfast club"})
 check("says STUCK", "STUCK" in r.stdout, r.stdout + r.stderr[-200:])
 check("names the client status", "downloadClientUnavailable" in r.stdout)
-check("points at host/password", "password must match" in r.stdout)
+check("names the ban/password paths",
+      "--fix-qbt-auth" in r.stdout and "--fix-client-password" in r.stdout)
 
 print("\n== verdict: downloading ==")
 d = tempfile.mkdtemp()
