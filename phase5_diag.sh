@@ -768,13 +768,35 @@ if [ "$SSH_UP" -eq 1 ]; then
     # instead of printing a 0 that cannot distinguish the two.
     NEWF="$(vmrun "sudo find /data/media/movies -type f \\( -iname '*.mkv' -o -iname '*.mp4' \\) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-")"
     if [ -n "$NEWF" ]; then
-        NA="$(vmrun "sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe -v '$NEWF':'$NEWF':ro jellyfin/jellyfin:12.4 -v error -select_streams a -show_entries stream=index -of csv=p=0 '$NEWF' 2>/dev/null | grep -c .")"
-        NS="$(vmrun "sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe -v '$NEWF':'$NEWF':ro jellyfin/jellyfin:12.4 -v error -select_streams s -show_entries stream=index -of csv=p=0 '$NEWF' 2>/dev/null | grep -c .")"
-        # Which languages are those subtitle tracks? "subs=2" is the new GOOD
-        # shape when both are spa; "subs=1" is a FAILURE when it is eng.
-        NLANGS="$(vmrun "sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe -v '$NEWF':'$NEWF':ro jellyfin/jellyfin:12.4 -v error -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0 '$NEWF' 2>/dev/null | cut -d, -f2 | tr '[:upper:]' '[:lower:]' | paste -sd, -")"
+        # fix 79 — the path is passed as a QUOTED argument to a remote `bash -s`
+        # instead of being interpolated into a '-v <path>' string. A title with
+        # an apostrophe (Ferris Bueller's Day Off) broke that quoting, ffprobe
+        # returned nothing, and this block still printed `audio=?` plus "none in
+        # the source" — a confident all-clear from a probe that never ran.
+        QNEWF="$(printf '%q' "$NEWF")"
+        PROBE="$(vmrun "sudo bash -s -- $QNEWF" <<'PROBEEOF' 2>/dev/null
+f="$1"
+p() { sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe \
+        -v "$f":"$f":ro jellyfin/jellyfin:12.4 -v error "$@" "$f" 2>/dev/null; }
+a=$(p -select_streams a -show_entries stream=index -of csv=p=0 | grep -c .)
+raw=$(p -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0)
+n=$(printf '%s' "$raw" | grep -c . || true)
+langs=$(printf '%s\n' "$raw" | cut -d, -f2 | tr '[:upper:]' '[:lower:]' \
+        | grep -v '^$' | paste -sd, -)
+echo "NA=$a"
+echo "NS=${n:-0}"
+echo "NLANGS=$langs"
+PROBEEOF
+)"
+        NA="$(printf '%s\n' "$PROBE" | sed -n 's/^NA=//p')"
+        NS="$(printf '%s\n' "$PROBE" | sed -n 's/^NS=//p')"
+        NLANGS="$(printf '%s\n' "$PROBE" | sed -n 's/^NLANGS=//p')"
+        # The languages come from the SAME remote probe above (fix 79), so this
+        # block cannot read a path that broke quoting.
         NSUB="${NS:-0}"
-        if [ "$NSUB" = "0" ]; then
+        if [ -z "${NA:-}" ]; then
+            note "newest library file probe returned nothing (quoting or docker error) — UNKNOWN, this is NOT 'none in the source'"
+        elif [ "$NSUB" = "0" ]; then
             note "newest library file: audio=${NA:-?} subs=0 (policy allows Spanish subs; none in the source — Bazarr must supply the .srt)"
         else
             NONES="$(printf '%s' "${NLANGS:-}" | tr ',' '\n' | grep -vE '^(spa|es|es-.*|spanish)$' | grep -c . || true)"

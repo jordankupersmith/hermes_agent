@@ -1836,12 +1836,24 @@ The block to read is:
 
 `profileId: NONE` is the silent cause: with no language profile Bazarr computes
 `missing_subtitles` as **empty**, so there is nothing "missing" to search for and
-no error appears anywhere. Assign + search for one title with:
+no error appears anywhere. Its scheduled job still logs *"Finished searching for
+missing Movies Subtitles"* every 6 h — it simply has no candidates.
+
+Observed 2026-11-20: **every** movie synced from Radarr was `profileId: NONE`,
+so `--assign` per film would fix today and break again on the next request. Fix
+the default once, then repair what is already there:
 
 ```bash
-sudo bash bazarr_status.sh --assign "ferris"    # profile + search-missing
-sudo bash bazarr_status.sh "ferris"             # expect a .srt and verdict present
+sudo bash bazarr_status.sh --default-profile   # future movies inherit profile 1
+sudo bash bazarr_status.sh --assign-all        # profile + search-missing, each film
+sudo bash bazarr_status.sh                     # expect on disk: N .srt + verdict present
 ```
+
+Both are idempotent and both **re-read** the value afterwards (`POST` returning
+204 means "accepted", not "stored"). `--default-profile` sends every settings
+section back, because a partial POST to `/api/system/settings` can blank the
+ones it omits; it refuses an unrecognised payload rather than posting blind.
+A single film can still be done with `--assign "<title>"`.
 
 A `verdict: es-LA subtitle present` line means the family gets LatAm Spanish from
 the sidecar even though the container carries zero subtitle streams.

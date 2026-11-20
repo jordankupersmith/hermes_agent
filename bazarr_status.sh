@@ -32,7 +32,7 @@ VM=jordan@192.168.122.10
 # A title term (any non-flag first argument) narrows every list below.
 TERM=""
 case "${1:-}" in
-    --assign|--search|--upgrade) : ;;
+    --assign|--assign-all|--search|--upgrade|--default-profile) : ;;
     "") : ;;
     *) TERM="$1" ;;
 esac
@@ -208,6 +208,130 @@ ids=[m.get("radarrId") for m in d
      if m.get("radarrId") and (not t or t in norm(m.get("title")))]
 print(ids[0] if len(ids)==1 else "")' 2>/dev/null
 }
+
+# fix 80 — the DEFAULT movie profile. Every movie synced from Radarr arrived
+# with profileId=None, so Bazarr computed missing_subtitles as empty and never
+# searched: the scheduled "Searched for missing movies subtitles" job ran every
+# 6 h and skipped them, with no error anywhere. Setting the default fixes every
+# FUTURE sync; `--assign-all` fixes what is already in the library.
+if [ "${1:-}" = "--default-profile" ]; then
+    echo "== fix: give new movies a default language profile =="
+    BASE="$BASE" KEY="$KEY" PID_OVERRIDE="${2:-}" python3 - <<'PY'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+base, key = os.environ["BASE"].rstrip("/"), os.environ["KEY"]
+
+
+def get(path):
+    req = urllib.request.Request(base + path, headers={"X-API-KEY": key})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def post(fields):
+    body = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(
+        base + "/api/system/settings", data=body, method="POST",
+        headers={"X-API-KEY": key,
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        print("  save rejected: HTTP %s" % e.code)
+        print("  body: %s" % e.read().decode("utf-8", "replace")[:300])
+        raise SystemExit(4)
+
+
+profiles = get("/api/system/languages/profiles")
+if not profiles:
+    print("  no language profile exists — create one first (bazarr_policy.sh)")
+    raise SystemExit(5)
+want = os.environ.get("PID_OVERRIDE") or str(profiles[0]["profileId"])
+if not any(str(p.get("profileId")) == want for p in profiles):
+    print("  profileId %s does not exist (have: %s)" %
+          (want, [p.get("profileId") for p in profiles]))
+    raise SystemExit(5)
+cfg = get("/api/system/settings")
+if not isinstance(cfg, dict) or "general" not in cfg:
+    print("  unexpected /api/system/settings shape (keys: %s) — refusing to POST it"
+          % (sorted(cfg)[:8] if isinstance(cfg, dict) else type(cfg).__name__))
+    raise SystemExit(6)
+gen = dict(cfg.get("general") or {})
+print("  before: movie_default_enabled=%s movie_default_profile=%s" % (
+    gen.get("movie_default_enabled"), gen.get("movie_default_profile")))
+if gen.get("movie_default_enabled") and str(gen.get("movie_default_profile")) == want:
+    print("  nothing to do — new movies already get profile %s" % want)
+    raise SystemExit(0)
+
+gen["movie_default_enabled"] = True
+gen["movie_default_profile"] = int(want)
+# Send every section the API returned, so a partial POST cannot blank the others.
+fields = {}
+for name, val in cfg.items():
+    fields["settings-" + name] = json.dumps(gen if name == "general" else val)
+st = post(fields)
+print("  save -> HTTP %s (%d section(s))" % (st, len(fields)))
+
+gen2 = dict(get("/api/system/settings").get("general") or {})
+ok = bool(gen2.get("movie_default_enabled")) and \
+    str(gen2.get("movie_default_profile")) == want
+print("  after : movie_default_enabled=%s movie_default_profile=%s" % (
+    gen2.get("movie_default_enabled"), gen2.get("movie_default_profile")))
+if not ok:
+    print("  MISMATCH — the default did not persist; nothing else was changed")
+    raise SystemExit(3)
+print("  verify: OK — movies synced from Radarr from now on get profile %s" % want)
+PY
+    RC=$?
+    [ "$RC" -eq 0 ] || { echo "  --default-profile failed (rc=$RC)"; exit "$RC"; }
+fi
+
+# fix 80 — assign the profile to every movie that has none, then search.
+# Idempotent: a movie that already has a profile is left alone.
+if [ "${1:-}" = "--assign-all" ]; then
+    echo "== assign the language profile to every movie with profileId NONE =="
+    PID="$(api /api/system/languages/profiles | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print(d[0]["profileId"] if d else "")' 2>/dev/null)"
+    [ -n "${PID:-}" ] || { echo "  no language profile exists — run bazarr_policy.sh" >&2; exit 5; }
+    RIDS="$(api /api/movies | python3 -c '
+import json,sys
+d=json.load(sys.stdin); d=d.get("data",[]) if isinstance(d,dict) else d
+for m in d:
+    if m.get("radarrId") and not m.get("profileId"):
+        print(m.get("radarrId"))' 2>/dev/null)"
+    if [ -z "${RIDS:-}" ]; then
+        echo "  nothing to do — every movie already has a profile"
+    else
+        echo "  profile $PID -> radarrId $(printf '%s' "$RIDS" | paste -sd' ' -)"
+        for RID in $RIDS; do
+            C1="$(curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
+                 -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$RID&profileid=$PID")"
+            C2="$(curl -s -o /dev/null -w '%{http_code}' -m 60 -X PATCH \
+                 -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$RID&action=search-missing")"
+            echo "    radarrId=$RID  POST profile -> $C1   PATCH search -> $C2"
+        done
+    fi
+    # verify by re-reading: a 204 means "accepted", not "stored" (fixes 71/73)
+    sleep 3
+    api /api/movies | python3 -c '
+import json,sys
+d=json.load(sys.stdin); d=d.get("data",[]) if isinstance(d,dict) else d
+bad=[m for m in d if m.get("radarrId") and not m.get("profileId")]
+print("  verify: %d movie(s), %d still without a profile" % (len(d), len(bad)))
+for m in d:
+    print("    %-38s profileId=%s missing=%s" % (
+        (m.get("title") or "")[:38], m.get("profileId"), m.get("missing_subtitles")))
+if bad:
+    print("  MISMATCH — the profile did not persist for: %s" %
+          ", ".join(str(m.get("title")) for m in bad))
+    raise SystemExit(3)
+'
+    RC=$?
+    [ "$RC" -eq 0 ] || { echo "  --assign-all failed (rc=$RC)"; exit "$RC"; }
+fi
 
 if [ "${1:-}" = "--assign" ]; then
     RID="$(resolve_rid "${2:-}")"

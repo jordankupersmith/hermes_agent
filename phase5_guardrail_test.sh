@@ -2197,6 +2197,66 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G32 complete: fix 78 present"
 
 # ======================================================================
+section "G33 — 2026-11-20 fixes 79/80 (probe quoting; Bazarr's default profile)"
+# fix 79: diag S11 interpolated the movie path into a '-v <path>' string, so
+# "Ferris Bueller's Day Off" broke the quoting, ffprobe returned nothing, and the
+# block still printed `audio=?` with "none in the source" — an all-clear from a
+# probe that never ran. fix 80: every Radarr-synced movie had profileId=None, so
+# Bazarr computed missing_subtitles=[] and never searched, silently.
+CHK_OK=1
+if grep -Fq 'QNEWF=' "$DIAG" \
+   && grep -Fq 'sudo bash -s -- $QNEWF' "$DIAG" \
+   && ! grep -Fq -- "-v '\$NEWF'" "$DIAG"; then
+    pass "S11 passes the path as a quoted argv, not inside a -v string (fix 79)"
+else
+    fail "a title with an apostrophe still breaks the probe (silent empty result)"
+    CHK_OK=0
+fi
+if grep -Fq 'probe returned nothing' "$DIAG" \
+   && grep -Fq "this is NOT 'none in the source'" "$DIAG"; then
+    pass "an empty probe reports UNKNOWN instead of a false all-clear (fix 79)"
+else
+    fail "a failed probe can still print 'none in the source'"
+    CHK_OK=0
+fi
+if grep -Fq 'if [ "${1:-}" = "--default-profile" ]; then' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'if [ "${1:-}" = "--assign-all" ]; then' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'movie_default_enabled' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "bazarr_status.sh can set the default movie profile and assign existing ones (fix 80)"
+else
+    fail "profileId=NONE can only be fixed by hand in the GUI — the silent case stays"
+    CHK_OK=0
+fi
+if grep -Fq 'refusing to POST it' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'MISMATCH — the default did not persist' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "the settings write refuses an unknown payload and re-reads the value (fix 80)"
+else
+    fail "the settings POST is blind — a partial write could blank other sections"
+    CHK_OK=0
+fi
+if [ -f "$SCRIPT_DIR/tests/test_bz_default.py" ] \
+   && grep -Fq 'preserves the radarr section' "$SCRIPT_DIR/tests/test_bz_default.py" \
+   && grep -Fq 'unrecognised settings payload' "$SCRIPT_DIR/tests/test_bz_default.py" \
+   && python3 "$SCRIPT_DIR/tests/test_bz_default.py" >/dev/null 2>&1; then
+    pass "offline suite pins: sections preserved, MISMATCH on a dropped field, shape refused"
+else
+    fail "tests/test_bz_default.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 80' "$MEMORY" && grep -Fq 'FIX 79' "$MEMORY" \
+       && grep -Fq -- '--default-profile' "$MANUAL"; then
+        pass "PROJECT_MEMORY records fixes 79/80 and the manual names the command"
+    else
+        fail "the profileId=NONE remedy is not in the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail — fixes 79/80 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G33 complete: fixes 79/80 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

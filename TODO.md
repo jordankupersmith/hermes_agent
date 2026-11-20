@@ -109,6 +109,23 @@ Details: manual **Step 10** (10a–10i).
       re-pinned. **The three existing films stay at 0 embedded subtitles** (owner:
       do not redownload) — Bazarr covers them, which is exactly why the fix-77
       check matters. Next real import is the first proof the new rule runs.
+- [x] **Reversed subtitle rule installed** (apply + diag `VERIFY_FAILS=0`,
+      17:57Z) — `subs:2->0` in the log is now the *old* entries only; the next
+      import is the first proof the normalizer keeps `spa`.
+- [ ] **Subtitles are MISSING on all three films: `profileId: NONE` (fix 80).**
+      Bazarr never searched them — with no language profile it computes
+      `missing_subtitles: []`, and its 6-hourly job "succeeds" with no
+      candidates. Every Radarr-synced movie had this, so per-film `--assign`
+      would break again on the next request. Run:
+      `sudo bash bazarr_status.sh --default-profile` then
+      `sudo bash bazarr_status.sh --assign-all`, then plain
+      `sudo bash bazarr_status.sh` and expect a `.srt` + `verdict: es-LA
+      subtitle present` for each. Only then is the household's subtitle need met
+      for these three.
+- [ ] **`check_normalize.sh` does not yet print subtitle languages.** It reports
+      audio/subs counts, which under fix 78 can read `subs:2` without saying
+      whether both are `spa` (diag S11 does check languages). Low priority; add
+      if a title with mixed-language subs shows up.
 - [ ] **Install the reversed rule into media-vm.** The scripts live in the repo
       and the *units* come from `phase5_apply.sh`; the normalizer binary itself is
       rewritten by an apply:
