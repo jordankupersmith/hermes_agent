@@ -99,13 +99,13 @@ Details: manual **Step 10** (10a–10i).
       two completed torrents (`qbt_admin.sh --remove-torrent "<title>" --yes`)
       to return ~14.8 GiB. After the flip, every future import costs its size
       once.
-- [ ] **Confirm the normalizer handled both new titles.** The library files are
-      still ~the torrent size (6.68 / 8.11 GiB), which is the *un-normalized*
-      shape, and the log has no entry for either. `sudo bash
-      check_normalize.sh` (now: newest file by default, with inode/link count)
-      must show `audio 1 subs 0` and a `done:` line per title. If it never runs,
-      the household audio/subtitle policy is not applied and the `.path` trigger
-      needs looking at.
+- [ ] **Confirm the normalizer handled both new titles.** The library file is
+      still exactly the torrent's size (6.68 GiB) and its mtime is 11 min after
+      the import, which is consistent with a remux that had nothing to drop (a
+      release already carrying 1 audio + 0 subs is copied, not shrunk). That is
+      a *guess* until `sudo bash check_normalize.sh` (now: newest file by
+      default, with inode/link count) shows `audio 1 subs 0` **and** a
+      `done:`/`remux:` line for each title in the log.
 - [ ] **Let both titles finish, then prove the hardlink (2026-11-20 11:3xZ).**
       The stall diagnosis came back clean: `connection_status=connected`,
       ~1.3 MiB/s combined, 27 seeds, DHT 226 — the earlier `stalledDL` was swarm
