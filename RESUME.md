@@ -29,6 +29,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Normalizer | **both titles done** — BC `audio_tracks:1->1 subs:2->0` `dur:5817s->5817s`; Ferris `audio_tracks:2->1 subs:2->0` `dur:6180s->6180s`; verify shows `audio 1 / subs 0 / video 1` |
 | Subtitle policy (fix 78) | **reversed by the owner 2026-11-20**: embedded `spa`/`es`/`es-XX` tracks are now KEPT, other languages dropped; the es-LA `.srt` from Bazarr is preferred, not exclusive. Normalizer + verify + diag S11 + AGENTS Rule 2b + manual 10i + G21 re-pinned. The three existing films keep 0 embedded subs (do not redownload) |
 | Subtitle coverage (fix 80) | **all three films have NO subtitles**: `profileId: NONE` in Bazarr, so it never searches them (the 6-hourly job "succeeds" with no candidates). Fix: `bazarr_status.sh --default-profile` (future syncs) + `--assign-all` (existing). diag S11's `audio=?` was my probe bug — fix 79 |
+| Subtitle write contract (fix 81) | Bazarr's settings POST only applies flat `settings-<section>-<key>` fields; a `settings-<section>` JSON blob returns 204 and stores nothing. `--default-profile` now posts two flat fields; its re-read catches a no-op |
 
 ## Next commands (2026-11-20, in order)
 

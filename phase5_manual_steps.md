@@ -1850,10 +1850,25 @@ sudo bash bazarr_status.sh                     # expect on disk: N .srt + verdic
 ```
 
 Both are idempotent and both **re-read** the value afterwards (`POST` returning
-204 means "accepted", not "stored"). `--default-profile` sends every settings
-section back, because a partial POST to `/api/system/settings` can blank the
-ones it omits; it refuses an unrecognised payload rather than posting blind.
+204 means "accepted", not "stored" — and in this API a wrong *key shape* also
+returns 204 and stores nothing, fix 81).
+
+`--default-profile` posts **flat fields**, one per setting:
+`settings-general-movie_default_enabled=true` and
+`settings-general-movie_default_profile=1`. That is the only shape Bazarr's
+`save_settings()` applies (`key.split('-')` must give 3 or 4 parts); a
+`settings-general=<json>` blob is silently skipped. Because only the posted keys
+are touched, other sections cannot be blanked, and the script refuses an
+unrecognised `/api/system/settings` payload rather than posting blind.
 A single film can still be done with `--assign "<title>"`.
+
+If the write still reports `MISMATCH`, check the container's key format before
+touching the payload:
+
+```bash
+sudo docker exec bazarr sh -c \
+  'grep -n -A60 "def post" /app/bazarr/bazarr/api/system/settings.py'
+```
 
 A `verdict: es-LA subtitle present` line means the family gets LatAm Spanish from
 the sidecar even though the container carries zero subtitle streams.

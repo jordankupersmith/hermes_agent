@@ -6,9 +6,17 @@
 #   sudo bash bazarr_status.sh                    # every movie in Bazarr
 #   sudo bash bazarr_status.sh "ferris"           # one title (substring)
 #   sudo bash bazarr_status.sh --assign <radarrId|title>
+#   sudo bash bazarr_status.sh --assign-all       (# every movie with no profile)
+#   sudo bash bazarr_status.sh --default-profile  (# future Radarr syncs)
 #   sudo bash bazarr_status.sh --search <radarrId|title>
 #   sudo bash bazarr_status.sh --upgrade          (# "Upgrade Previously
 #                                                  Downloaded Subtitles" task)
+#
+# fix 80/81 — a movie synced from Radarr with no language profile has an empty
+# missing_subtitles, so Bazarr never searches it and never errors. Future syncs
+# get the default profile; existing ones are repaired with --assign-all. The
+# settings write must use flat `settings-<section>-<key>` fields: Bazarr's
+# save_settings() skips any other shape and still answers 204 (see fix 81).
 #
 # fix 77 — this script used to filter on the literal string "hail mary" in the
 # Bazarr list, the Radarr list and the log, so with three films in the library it
@@ -228,8 +236,8 @@ def get(path):
         return json.loads(r.read() or b"{}")
 
 
-def post(fields):
-    body = urllib.parse.urlencode(fields).encode()
+def post(pairs):
+    body = urllib.parse.urlencode(pairs).encode()
     req = urllib.request.Request(
         base + "/api/system/settings", data=body, method="POST",
         headers={"X-API-KEY": key,
@@ -264,14 +272,23 @@ if gen.get("movie_default_enabled") and str(gen.get("movie_default_profile")) ==
     print("  nothing to do — new movies already get profile %s" % want)
     raise SystemExit(0)
 
-gen["movie_default_enabled"] = True
-gen["movie_default_profile"] = int(want)
-# Send every section the API returned, so a partial POST cannot blank the others.
-fields = {}
-for name, val in cfg.items():
-    fields["settings-" + name] = json.dumps(gen if name == "general" else val)
+# fix 81 — the wire format. Bazarr's save_settings() (app/config.py) splits
+# every form key on '-' and applies it ONLY when the shape is
+# settings-<section>-<key> (len == 3) or settings-<section>-<key>-<sub> (len 4).
+# This block first sent `settings-general=<whole section as JSON>` — 46 keys that
+# split into TWO parts, so every one fell straight through the if-chain and the
+# handler returned 204 having stored nothing. A JSON blob is not a partial
+# write, it is no write at all, and the API says 204 either way.
+#
+# So: one flat field per setting. Nothing else is resent, and nothing else can be
+# blanked, because save_settings() only touches the keys present in the form.
+fields = [
+    ("settings-general-movie_default_enabled", "true"),
+    ("settings-general-movie_default_profile", want),
+]
 st = post(fields)
-print("  save -> HTTP %s (%d section(s))" % (st, len(fields)))
+print("  save -> HTTP %s (%d field(s): %s)" % (
+    st, len(fields), ", ".join(k for k, _ in fields)))
 
 gen2 = dict(get("/api/system/settings").get("general") or {})
 ok = bool(gen2.get("movie_default_enabled")) and \

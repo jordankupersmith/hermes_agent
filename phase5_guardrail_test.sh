@@ -2234,11 +2234,24 @@ else
     fail "the settings POST is blind — a partial write could blank other sections"
     CHK_OK=0
 fi
+# fix 81: save_settings() only applies settings-<section>-<key>; a
+# settings-<section> JSON blob is silently skipped and still answers 204. The
+# first version of this fix sent exactly that blob: 46 keys, nothing stored.
+if grep -Fq 'settings-general-movie_default_enabled' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'settings-general-movie_default_profile' "$SCRIPT_DIR/bazarr_status.sh" \
+   && ! grep -Fq 'fields["settings-" + name]' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "the default profile is written as flat settings-<section>-<key> fields (fix 81)"
+else
+    fail "the settings write uses the JSON blob shape Bazarr silently ignores"
+    CHK_OK=0
+fi
 if [ -f "$SCRIPT_DIR/tests/test_bz_default.py" ] \
    && grep -Fq 'preserves the radarr section' "$SCRIPT_DIR/tests/test_bz_default.py" \
    && grep -Fq 'unrecognised settings payload' "$SCRIPT_DIR/tests/test_bz_default.py" \
+   && grep -Fq 'blob POST stored nothing' "$SCRIPT_DIR/tests/test_bz_default.py" \
+   && grep -Fq 'sends NO settings-<section> blob' "$SCRIPT_DIR/tests/test_bz_default.py" \
    && python3 "$SCRIPT_DIR/tests/test_bz_default.py" >/dev/null 2>&1; then
-    pass "offline suite pins: sections preserved, MISMATCH on a dropped field, shape refused"
+    pass "offline suite pins: real dispatch, blob ignored, MISMATCH, shape refused"
 else
     fail "tests/test_bz_default.py missing, gutted, or failing"
     CHK_OK=0

@@ -112,16 +112,22 @@ Details: manual **Step 10** (10a–10i).
 - [x] **Reversed subtitle rule installed** (apply + diag `VERIFY_FAILS=0`,
       17:57Z) — `subs:2->0` in the log is now the *old* entries only; the next
       import is the first proof the normalizer keeps `spa`.
-- [ ] **Subtitles are MISSING on all three films: `profileId: NONE` (fix 80).**
-      Bazarr never searched them — with no language profile it computes
-      `missing_subtitles: []`, and its 6-hourly job "succeeds" with no
-      candidates. Every Radarr-synced movie had this, so per-film `--assign`
-      would break again on the next request. Run:
-      `sudo bash bazarr_status.sh --default-profile` then
-      `sudo bash bazarr_status.sh --assign-all`, then plain
-      `sudo bash bazarr_status.sh` and expect a `.srt` + `verdict: es-LA
-      subtitle present` for each. Only then is the household's subtitle need met
-      for these three.
+- [x] **`--assign-all` worked**: all three movies now `profileId=1` with
+      4 missing-language items each, and Bazarr started two
+      "Downloading missing subtitles" jobs (18:27Z).
+- [ ] **`--default-profile` is a no-op until fix 81 is deployed** (re-run it).
+      It posted `settings-general=<json>` x46, got 204 and stored nothing:
+      Bazarr's `save_settings()` only applies `settings-<section>-<key>` and
+      silently skips everything else. Now posts two flat fields. Re-run:
+      `sudo bash bazarr_status.sh --default-profile` → expect
+      `verify: OK — movies synced from Radarr from now on get profile 1`.
+- [ ] **Project Hail Mary is an anomaly: `profileId=1`, `missing: []`, 0 `.srt`.**
+      An empty missing list with no subtitle on disk means Bazarr believes it
+      already has something (stale DB rows from the pre-normalize file, whose 2
+      subtitle tracks fix 59 stripped). The `.srt` files for the other two are
+      still pending; check all three with `bazarr_status.sh` once the download
+      jobs finish. `/tmp/opencode/bazarr_probe.sh` (read-only) dumps PHM's
+      `subtitles` rows and Bazarr's settings key format.
 - [ ] **`check_normalize.sh` does not yet print subtitle languages.** It reports
       audio/subs counts, which under fix 78 can read `subs:2` without saying
       whether both are `spa` (diag S11 does check languages). Low priority; add
