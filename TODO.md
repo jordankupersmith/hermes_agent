@@ -112,22 +112,20 @@ Details: manual **Step 10** (10a–10i).
 - [x] **Reversed subtitle rule installed** (apply + diag `VERIFY_FAILS=0`,
       17:57Z) — `subs:2->0` in the log is now the *old* entries only; the next
       import is the first proof the normalizer keeps `spa`.
-- [x] **`--assign-all` worked**; the two download jobs finished at 18:27Z and
-      **Ferris Bueller's Day Off now has 2 sidecars**: `.es-MX.srt` (row 1,
-      LatAm non-HI) and `.es.srt` (row 2).
-- [x] **`--default-profile` landed** after fix 81: `movie_default_enabled=True`,
-      `movie_default_profile=1` (read back through the API).
-- [x] **Project Hail Mary was not a stale-DB anomaly**: it has
-      `...es-MX.hi.srt` (row 3, LatAm HI) on disk since 2026-11-18. Bazarr's
-      `missing: []` is correct under the cutoff (row 3 reached). The status
-      script had said MISSING because of fix 82, not because the file was absent.
-- [ ] **The Breakfast Club still has no subtitle.** Bazarr's job #84
-      "Downloaded missing subtitles" completed at 18:27Z but wrote no file, and
-      `subf2m` is in `ConfigurationError` (retry in 11 h), leaving only
-      `opensubtitlescom`. Retry once that is healthy:
-      `sudo bash bazarr_status.sh --search "breakfast"`, then plain
-      `bazarr_status.sh`; if the row stays MISSING, check Bazarr History for
-      movie 3 (score below `minimum_score_movie=70` is the usual reason).
+- [x] **All three films have a Spanish subtitle on disk** (2026-11-20 19:49Z):
+      Ferris `.es-MX.srt` + `.es.srt`; Breakfast Club the same pair after
+      `--search` (the first attempt wrote nothing — transient provider miss);
+      Project Hail Mary `.es-MX.hi.srt` (row 3, cutoff satisfied).
+- [ ] **Confirm Jellyfin indexes them** (the sidecar existing is only half the
+      contract):
+      `sudo bash jellyfin_admin.sh --scan` then
+      `sudo bash jellyfin_admin.sh --subs` → every film should show
+      `verdict: N Spanish subtitle stream(s) indexed`, exit 0. A
+      `language NOT parsed from the filename` line means the `.es-MX` suffix
+      needs a different name.
+- [ ] **Re-install + diag to verify fix 79 live**: `phase5_step1_install.sh`
+      then `phase5_diag.sh`; S11 must print audio/subs **and languages** for the
+      newest file with no `audio=?`.
 - [ ] **`check_normalize.sh` does not yet print subtitle languages.** It reports
       audio/subs counts, which under fix 78 can read `subs:2` without saying
       whether both are `spa` (diag S11 does check languages). Low priority; add

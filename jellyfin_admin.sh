@@ -5,6 +5,7 @@
 #
 #   sudo bash jellyfin_admin.sh --show
 #   sudo bash jellyfin_admin.sh --scan
+#   sudo bash jellyfin_admin.sh --subs          (# what the TV will offer)
 #   sudo bash jellyfin_admin.sh --server-name "Family Media"
 #
 # How it authenticates without a key in .env: it reads an EXISTING API key out
@@ -25,7 +26,7 @@ ACTION="${1:-}"
 [ "$(id -u)" -eq 0 ] || { echo "must run as root: sudo bash $0" >&2; exit 1; }
 
 case "$ACTION" in
-    --show|--scan|--server-name) : ;;
+    --show|--scan|--subs|--server-name) : ;;
     *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
 
@@ -148,6 +149,52 @@ if act == "--server-name":
     st2, cfg2 = api("/System/Configuration", token)
     out("  ServerName %r -> %r (HTTP %s)" % (before, (cfg2 or {}).get("ServerName"), st))
     sys.exit(0)
+
+if act == "--subs":
+    # What the TV is actually offered: the sidecars exist on disk (Bazarr's job)
+    # but Jellyfin must index them and parse the language out of the filename
+    # suffix. ".es-MX.srt" is not an ISO code, so this is the one place that can
+    # tell us whether the family will see "Spanish" or an undefined track.
+    st, data = api("/Items?Recursive=true&IncludeItemTypes=Movie"
+                   "&Fields=MediaSources,Path&Limit=200", token)
+    items = (data or {}).get("Items") or []
+    if not items:
+        out("  Jellyfin returned no movies — has the library ever scanned?")
+        sys.exit(6)
+    SPANISH = {"spa", "es", "es-mx", "es-419", "ea", "spl", "es-la"}
+    missing = 0
+    for it in items:
+        streams = []
+        for ms in it.get("MediaSources") or []:
+            streams += [x for x in (ms.get("MediaStreams") or [])
+                        if (x.get("Type") or "") == "Subtitle"]
+        out("")
+        out("  %s" % (it.get("Name") or "?"))
+        if not streams:
+            out("    NO subtitle stream indexed")
+            missing += 1
+            continue
+        spanish = 0
+        for x in streams:
+            lang = (x.get("Language") or "")
+            label = (x.get("DisplayTitle") or x.get("Title") or "")
+            bits = [lang or "?", "external" if x.get("IsExternal") else "embedded"]
+            if x.get("IsHearingImpaired"):
+                bits.append("HI")
+            note = ""
+            if not lang:
+                note = "  <-- language NOT parsed from the filename"
+            elif lang.lower() in SPANISH:
+                spanish += 1
+            else:
+                note = "  <-- not Spanish"
+            out("    %-14s %s%s" % (" ".join(bits), label, note))
+        if not spanish:
+            out("    no Spanish subtitle indexed")
+            missing += 1
+        else:
+            out("    verdict: %d Spanish subtitle stream(s) indexed" % spanish)
+    sys.exit(1 if missing else 0)
 
 if act == "--scan":
     st, _ = api("/Library/Refresh", token, "POST")

@@ -19,13 +19,31 @@ def extract():
         sys.exit("could not extract heredoc")
     return m.group(1)
 
+ITEMS = {"Items": [
+    {"Name": "Ferris Bueller's Day Off",
+     "MediaSources": [{"MediaStreams": [
+         {"Type": "Subtitle", "Language": "spa", "DisplayTitle": "Spanish",
+          "IsExternal": True},
+         {"Type": "Subtitle", "Language": "spa", "DisplayTitle": "Spanish",
+          "IsExternal": True, "IsHearingImpaired": True}]}]},
+    {"Name": "The Breakfast Club",
+     "MediaSources": [{"MediaStreams": [
+         {"Type": "Subtitle", "Language": "", "DisplayTitle": "es-MX",
+          "IsExternal": True}]}]},
+    {"Name": "Project Hail Mary",
+     "MediaSources": [{"MediaStreams": [
+         {"Type": "Audio", "Language": "eng"}]}]},
+]}
+
+
 class State:
-    def __init__(self):
+    def __init__(self, items=None):
         self.server_name = "a45dba6c517e"
         self.cfg_posts = 0
         self.scan_polls = 0
         self.scans_started = 0
         self.valid_token = TOKEN
+        self.items = ITEMS if items is None else items
 
 def serve(state, port=0):
     class H(BaseHTTPRequestHandler):
@@ -48,6 +66,8 @@ def serve(state, port=0):
             if self.path == "/System/Configuration":
                 return self._json(200, {"ServerName": state.server_name,
                                         "UICulture": "en-US"})
+            if self.path.startswith("/Items"):
+                return self._json(200, state.items)
             if self.path == "/ScheduledTasks":
                 state.scan_polls += 1
                 # running for the first two polls, then idle
@@ -183,6 +203,39 @@ r = run(blk, 9, "--show")
 print(r.stdout.rstrip())
 check("exit 5", r.returncode == 5, r.returncode)
 check("no traceback", "Traceback" not in r.stderr, r.stderr[-200:])
+
+print("\n== 6. --subs reports what the TV is offered ==")
+st = State(); srv = serve(st); port = srv.server_address[1]
+blk = (raw.replace('("http://192.168.122.10:8096", "http://127.0.0.1:8096")',
+                   '("http://127.0.0.1:%d",)' % port)
+          .replace('DB   = "/data/config/jellyfin/data/jellyfin.db"',
+                   'DB   = %r' % dbpath)
+          .replace("time.sleep(10)", "time.sleep(0.05)"))
+r = run(blk, port, "--subs")
+print(r.stdout.rstrip())
+check("exit 1 when a film has no Spanish subtitle", r.returncode == 1, r.returncode)
+check("counts the Spanish streams", "2 Spanish subtitle stream(s) indexed" in r.stdout)
+check("marks HI", "spa external HI" in r.stdout)
+check("flags a language Jellyfin could not parse",
+      "language NOT parsed from the filename" in r.stdout)
+check("flags a movie with no subtitle stream",
+      "NO subtitle stream indexed" in r.stdout)
+check("does not print the API key", TOKEN not in r.stdout)
+srv.shutdown()
+
+print("\n== 7. --subs with every film covered exits 0 ==")
+only_good = {"Items": ITEMS["Items"][:1]}
+st = State(items=only_good); srv = serve(st); port = srv.server_address[1]
+blk = (raw.replace('("http://192.168.122.10:8096", "http://127.0.0.1:8096")',
+                   '("http://127.0.0.1:%d",)' % port)
+          .replace('DB   = "/data/config/jellyfin/data/jellyfin.db"',
+                   'DB   = %r' % dbpath)
+          .replace("time.sleep(10)", "time.sleep(0.05)"))
+r = run(blk, port, "--subs")
+print(r.stdout.rstrip())
+check("exit 0", r.returncode == 0, r.returncode)
+check("says the stream is indexed", "verdict: 2 Spanish" in r.stdout)
+srv.shutdown()
 
 print("\n%s" % ("ALL PASS" if not fails else "%d FAILURE(S)" % fails))
 sys.exit(1 if fails else 0)

@@ -2057,7 +2057,17 @@ upgrade (10h), and again after the streams under a path change:
 ```bash
 sudo bash jellyfin_admin.sh --show     # current ServerName + last scan
 sudo bash jellyfin_admin.sh --scan     # POST /Library/Refresh, then wait
+sudo bash jellyfin_admin.sh --subs     # what the TV is offered, per film
 ```
+
+`--subs` is the read-only close of the subtitle loop: it lists every movie's
+subtitle streams with their **language as Jellyfin parsed it**, whether the
+stream is `external` (the Bazarr `.srt`) or `embedded`, and whether it is
+flagged HI. It exits **1** if any film has no Spanish stream, and prints
+`language NOT parsed from the filename` when Jellyfin could not decode a
+suffix — which is the one failure a sidecar on disk cannot reveal. At the time
+of writing the suffixes were `Title.es.srt`, `Title.es-MX.srt` and
+`Title.es-MX.hi.srt`.
 
 It reads an **existing** API key from `jellyfin.db` *inside the VM*, uses it
 there, and never prints it. If the DB has no key it exits 2 and prints the two
