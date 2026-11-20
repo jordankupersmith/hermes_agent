@@ -2096,12 +2096,23 @@ Hindi before any hearing-impaired-flag handling, and the repair branch
 no LatAm-HI row.
 
 When a sidecar is renamed outside Bazarr (or the normalizer strips embedded
-tracks, which Bazarr still believes are there), re-read the folder so Bazarr's
-stored rows match the disk:
+tracks, which Bazarr still believes are there), re-read the folder **and**
+recompute what Bazarr thinks is missing:
 
 ```bash
-sudo bash bazarr_status.sh --rescan "breakfast"   # PATCH action=scan-disk
+sudo bash bazarr_status.sh --rescan "breakfast"
+#  PATCH action=scan-disk  -> re-reads the .srt files in that folder
+#  POST  profile <id>       -> recomputes missing_subtitles from the new rows
 ```
+
+Both steps are required. `scan-disk` rewrites the subtitle **rows** but leaves
+`missing_subtitles` alone, so after deleting a sidecar the movie can report
+`missing: none` with no file on disk, and `search-missing` then has nothing to
+do. Re-POSTing the same profile hits the API's `post` handler, which runs
+`list_missing_subtitles_movies(radarrid)`. The script also prints only the
+record whose `radarrId` matches: `GET /api/movies` takes `radarrid[]` (an
+array), and a plain `?radarrid=N` is silently ignored — it returns **every**
+movie, so taking the first record shows another film's state (fix 84).
 
 It reads an **existing** API key from `jellyfin.db` *inside the VM*, uses it
 there, and never prints it. If the DB has no key it exits 2 and prints the two

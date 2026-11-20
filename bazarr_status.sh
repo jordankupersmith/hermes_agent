@@ -414,19 +414,50 @@ fi
 if [ "${1:-}" = "--rescan" ]; then
     SID="$(resolve_rid "${2:-}")"
     [ -n "$SID" ] || SID="$(first_radarrid)"
-    echo "== scan-disk for radarrId ${SID:-?} =="
-    CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 120 -X PATCH \
+    echo "== rescan for radarrId ${SID:-?} =="
+    # GET /api/movies takes `radarrid[]` (array), NOT `radarrid`; a plain
+    # `radarrid=` is ignored and returns EVERY movie. Read the profile id from
+    # the record that actually matches, never from position 0 (fix 84).
+    PID="$(api "/api/movies?radarrid[]=$SID" | SID="$SID" python3 -c '
+import json,os,sys
+try: d=json.load(sys.stdin)
+except Exception: raise SystemExit
+d=d.get("data",[]) if isinstance(d,dict) else d
+for m in d:
+    if str(m.get("radarrid", m.get("radarrId"))) == os.environ["SID"]:
+        print(m.get("profileId") or "")
+        break
+' 2>/dev/null)"
+    C1="$(curl -s -o /dev/null -w '%{http_code}' -m 120 -X PATCH \
         -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$SID&action=scan-disk")"
-    echo "  HTTP $CODE (204 = scan ran)"
+    echo "  PATCH scan-disk  -> HTTP $C1 (204 = re-read the folder)"
+    # fix 84 — scan-disk rewrites the subtitle ROWS but not missing_subtitles,
+    # so a deleted/renamed sidecar leaves the movie claiming `missing: none`
+    # forever and search-missing then has nothing to do. POSTing the same
+    # profile back runs list_missing_subtitles_movies(radarrid) (api/movies
+    # post handler), which recomputes the missing list from the new rows.
+    if [ -n "${PID:-}" ]; then
+        C2="$(curl -s -o /dev/null -w '%{http_code}' -m 60 -X POST \
+            -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$SID&profileid=$PID")"
+        echo "  POST profile $PID  -> HTTP $C2 (204 = missing_subtitles recomputed)"
+    else
+        echo "  profileId is NONE — skipping the recompute (run --assign first)"
+    fi
     sleep 2
-    api "/api/movies?radarrid=$SID" | python3 -c '
-import json,sys
+    api "/api/movies?radarrid[]=$SID" | SID="$SID" python3 -c '
+import json,os,sys
 try: d=json.load(sys.stdin)
 except Exception: print("  (unparseable response)"); raise SystemExit
-m = d.get("data", d) if isinstance(d, dict) else d
-if isinstance(m, list): m = m[0] if m else {}
+d=d.get("data",[]) if isinstance(d,dict) else d
+want=os.environ["SID"]
+m=next((x for x in d if str(x.get("radarrId", x.get("radarrid"))) == want), None)
+if m is None:
+    print("  no movie with radarrId %s in the response — NOT printing another" % want)
+    print("  movie as if it were this one (fix 84).")
+    raise SystemExit(3)
 miss = [(x.get("code2") or "?") + (".hi" if x.get("hi") else "")
         for x in (m.get("missing_subtitles") or [])]
+print("  title      : %s" % m.get("title"))
 print("  missing now:", ", ".join(miss) if miss else "none")
 print("  rows       :", [(x.get("code2"),
                           (x.get("path") or "").rsplit("/", 1)[-1])

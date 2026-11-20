@@ -121,13 +121,18 @@ Details: manual **Step 10** (10a–10i).
       `? Indefinido`, and `.es-MX.hi.srt` as **`hin Hindi`**: Jellyfin resolves
       the rightmost filename token as a culture, and the HI repair only fires
       when the token to its left is a real culture (`es`, not `es-MX`).
-- [ ] **Apply the 3-row profile (owner decision: drop LatAm-HI only).**
-      `sudo bash bazarr_policy.sh --apply --movie 1` → rows `ea, es, es.hi`,
-      cutoff on `es.hi`. Then remove PHM's now-unwanted
-      `Project Hail Mary (2026) Remux-1080p.es-MX.hi.srt`, `--rescan 1`, and
-      `--search` each film. Ferris/Breakfast will gain `.es.hi.srt`
-      (Jellyfin: Spanish + HI); PHM will gain `.es-MX.srt` + `.es.srt`.
-      Then `jellyfin_admin.sh --scan` + `--subs` → no `hin`, no `?`.
+- [x] **3-row profile applied** (`ea, es, es.hi`, cutoff on `es.hi`).
+- [x] **PHM's LatAm-HI file removed** (Jellyfin read it as Hindi).
+- [ ] **PHM is missing a subtitle and Bazarr says `missing: none` (fix 84).**
+      `scan-disk` rewrote its rows but not `missing_subtitles`, so
+      `search-missing` had nothing to fetch. `--rescan` now does both:
+      `sudo bash bazarr_status.sh --rescan 1` → expect `title: Project Hail
+      Mary`, `missing now: ea, es, es.hi`, `rows: []`. Then
+      `--search 1`, wait, and confirm `.es-MX.srt` + `.es.srt` land.
+- [ ] **`missing: es.hi` on Ferris/Breakfast is expected, not a fault.** The
+      HI row is the last-resort row and the providers have no HI match for these
+      releases; the non-HI rows (which the TV uses) are present. Bazarr will
+      retry it every 6 h harmlessly.
 - [ ] **Re-install + diag to verify fix 79 live**: `phase5_step1_install.sh`
       then `phase5_diag.sh`; S11 must print audio/subs **and languages** for the
       newest file with no `audio=?`.

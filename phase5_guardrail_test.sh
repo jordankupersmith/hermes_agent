@@ -2319,10 +2319,13 @@ else
     CHK_OK=0
 fi
 if grep -Fq 'if [ "${1:-}" = "--rescan" ]; then' "$SCRIPT_DIR/bazarr_status.sh" \
-   && grep -Fq 'action=scan-disk' "$SCRIPT_DIR/bazarr_status.sh"; then
-    pass "bazarr_status.sh --rescan re-reads a folder after a sidecar change"
+   && grep -Fq 'action=scan-disk' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'missing_subtitles recomputed' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'radarrid[]=' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'NOT printing another' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "bazarr_status.sh --rescan re-reads, recomputes, and filters by radarrId (fix 84)"
 else
-    fail "no --rescan: a renamed sidecar leaves Bazarr's stored rows stale"
+    fail "--rescan is incomplete: scan-disk alone leaves missing_subtitles stale (or it prints the wrong movie)"
     CHK_OK=0
 fi
 if [ -f "$SCRIPT_DIR/tests/test_bz.py" ] \
