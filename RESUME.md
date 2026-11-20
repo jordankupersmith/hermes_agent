@@ -19,7 +19,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Repository | `git init -b main` done (commits `cc2e33d`, `db7c9bb`, `0e78996`, + fix 68); `tests/` holds the offline mock suites; **no remote yet**, license undecided |
 | Download client (fix 67) | **repaired 2026-11-20**: ban cleared by restart, then `PUT downloadclient/1 -> 202` and `testall isValid=True` |
 | *The Breakfast Club* (radarrId 3) | **downloading** (grabbed 08:25Z, `cat=radarr`); `save_path=/data/torrents` because manual-mode category paths were off — run `qbt_admin.sh --fix-category-paths` for future adds (fix 69) |
-| qBt category paths (fix 69) | **need enabling**: `Session\UseCategoryPathsInManualMode=false` by default, so `radarr` → `/data/torrents/movies` is ignored; `sudo bash qbt_admin.sh --fix-category-paths` |
+| qBt category paths (fix 69) | **enabled 2026-11-20**: `use_category_paths_in_manual_mode=True` (verified live), `radarr -> /data/torrents/movies`; the in-flight torrent keeps `/data/torrents` (added before the switch) |
 
 ## Done 2026-11-19 (scripted — manual 10j)
 

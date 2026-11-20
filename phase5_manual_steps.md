@@ -1397,21 +1397,27 @@ qBittorrent left sidebar → **Categories**:
   folder must live under `/data/torrents` as well. Everything is on the one ext4
   volume — that is what makes hardlinks possible.
 
-**Then turn category paths on for manual-mode torrents (fix 69).** Radarr sends
-only a category, no save path, so qBittorrent files the torrent in *manual* mode
-— and in that mode the category path is ignored unless
-`Session\UseCategoryPathsInManualMode` is true (default false). Skip this and
-`torrents/movies/` stays empty while everything lands in `/data/torrents`
-(still hardlinkable, just not where the layout says):
+**Then run the first-run helper (fix 69).** Radarr sends only a category, no
+save path, so qBittorrent files the torrent in *manual* mode — and in that mode
+the category path is ignored unless `Session\UseCategoryPathsInManualMode` is
+true (default false). Skip this and `torrents/movies/` stays empty while
+everything lands in `/data/torrents` (still hardlinkable, just not where the
+layout says). One idempotent command does all three steps:
 
 ```bash
-sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
-sudo bash qbt_admin.sh --fix-category-paths
+sudo bash qbt_admin.sh --first-run
 ```
 
-`--fix-category-paths` is idempotent, applies the preference live (no restart)
-and verifies it by reading it back; it exits 2 if a category still has no
-`savePath`. It affects **new** adds only.
+| Step | What it does | Why it can fail silently |
+| --- | --- | --- |
+| 1/3 | `radarr` category → `/data/torrents/movies` | `createCategory` answers 409 for an existing name and **does not** change the path (falls back to `editCategory`) |
+| 2/3 | Radarr client field `movieCategory = radarr` | writing a field named `category` returns **202** and is dropped |
+| 3/3 | `use_category_paths_in_manual_mode = true` | the path is ignored until this is on, whatever the category says |
+
+The individual commands remain available (`--create-category`,
+`--set-radarr-category`, `--fix-category-paths`); the last one applies the
+preference live (no restart), verifies it by reading it back, and exits 2 if a
+category still has no `savePath`. All of it affects **new** adds only.
 
 ### 10d. End-to-end test + hardlink proof
 
@@ -1827,6 +1833,8 @@ all** unless qBittorrent is told to use it (see the 2026-11-20 note below), so
 `/data/torrents`:
 
 ```bash
+sudo bash qbt_admin.sh --first-run      # all three steps, idempotent
+# or one at a time:
 sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
 sudo bash qbt_admin.sh --set-radarr-category radarr
 sudo bash qbt_admin.sh --fix-category-paths      # required — see below
@@ -2079,7 +2087,7 @@ password from `QB_PASS`/the container log, the Jellyfin token from
 | --- | --- |
 | Reclaim | qBittorrent → torrent → *Remove* → tick *delete files* |
 | Scan | Dashboard → Scheduled Tasks → *Scan Media Library* → ▶ |
-| Category | qBt → *Categories* → add `radarr` → `/data/torrents/movies`; Radarr → Settings → Download Clients → qBittorrent → *Category*; then `qbt_admin.sh --fix-category-paths` (fix 69) |
+| Category | qBt → *Categories* → add `radarr` → `/data/torrents/movies`; Radarr → Settings → Download Clients → qBittorrent → *Category*; then `qbt_admin.sh --first-run` (fix 69) |
 | Subtitles | Bazarr → Settings → Languages → profile rows + *Cutoff* radio |
 | Server name | Dashboard → General → *Server Name* → **Family Media** → Save |
 

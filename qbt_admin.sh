@@ -5,6 +5,7 @@
 #
 #   sudo bash qbt_admin.sh --status
 #   sudo bash qbt_admin.sh --remove-torrent "Project.Hail.Mary" [--yes]
+#   sudo bash qbt_admin.sh --first-run      (category + Radarr field + path mode)
 #   sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
 #   sudo bash qbt_admin.sh --set-radarr-category radarr
 #   sudo bash qbt_admin.sh --fix-category-paths
@@ -317,6 +318,35 @@ PY
     python3 "$TMP/catpaths.py" verify "$TMP/prefs.json" "$TMP/cats.json"
 }
 
+cmd_first_run() {
+    # One idempotent command for a fresh install (manual 10c). Each step is
+    # individually idempotent, but they are easy to half-do: the category path
+    # is ignored without the manual-mode switch (fix 69), and Radarr's field is
+    # `movieCategory`, not `category` (a wrong name is accepted and dropped).
+    local rc=0
+    echo "== 1/3 qBittorrent category 'radarr' -> /data/torrents/movies =="
+    cmd_category radarr /data/torrents/movies || rc=$?
+    [ "$rc" -eq 0 ] || die "step 1 failed (rc=$rc) — fix it before continuing"
+
+    echo
+    echo "== 2/3 Radarr download client: movieCategory = 'radarr' =="
+    cmd_radarr_category radarr || rc=$?
+    [ "$rc" -eq 0 ] || die "step 2 failed (rc=$rc) — fix it before continuing"
+
+    echo
+    echo "== 3/3 qBittorrent: use category paths in manual mode =="
+    cmd_category_paths || rc=$?
+    [ "$rc" -eq 0 ] || die "step 3 failed (rc=$rc) — see the warnings above"
+
+    echo
+    echo "== first-run complete =="
+    echo "  The next Radarr grab is filed with cat=radarr and lands in"
+    echo "  /data/torrents/movies. Verify the OUTCOME after one download with:"
+    echo "    sudo bash library_status.sh \"<title>\""
+    echo "  (a torrent added before this run keeps /data/torrents — same"
+    echo "   filesystem, so imports and hardlinks are unaffected)"
+}
+
 cmd_radarr_category() {
     local cat="$1" key
     key="$(rdk)"; [ -n "$key" ] || die "no RADARR_API_KEY in $ENVF"
@@ -395,6 +425,7 @@ case "${1:-}" in
                          cmd_category "$2" "$3" ;;
     --set-radarr-category) [ $# -ge 2 ] || die "usage: --set-radarr-category <name>"
                          cmd_radarr_category "$2" ;;
+    --first-run)         cmd_first_run ;;
     --fix-category-paths) cmd_category_paths ;;
     *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

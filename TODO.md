@@ -217,6 +217,27 @@ stream — but it is no longer the blocker.
 
 ## P3 — later / optional (no household impact)
 
+- [ ] **Deployment topologies — a non-VM install is allowed (owner, 2026-11-20).**
+      `media-vm` must stop being mandatory: a single host running the same
+      Compose stack is acceptable **provided torrent traffic still cannot leave
+      without the tunnel**. The VM is defence-in-depth (boundary, snapshots,
+      deploy key); the security property is the netns + gluetun firewall.
+      Acceptance for a flat install:
+      - qBittorrent in gluetun's namespace — no `network_mode: host`, no second
+        interface, no re-added default route;
+      - gluetun firewall **on** (the kill switch); `FIREWALL_OUTBOUND_SUBNETS`
+        names only LANs that truly need direct access;
+      - kill-switch proof: with the tunnel down, `docker exec qbittorrent curl
+        -s ifconfig.me` fails and the client still reports `tun0`;
+      - host firewall backstop replaces the VM's ufw rules: `DOCKER-USER`
+        egress guard for 6881–6889 + inbound source guard, admin UIs bound to
+        loopback/private address and **never** `0.0.0.0`;
+      - `phase5_diag.sh` S6 re-expressed as "admin ports are not on the LAN
+        interface" (the `192.168.122.10` literals become placeholders);
+      - no guest→RFC1918 pivot guard on a flat host, so container→LAN is denied
+        by the host firewall except for the services that need it;
+      - same `PUID/PGID`, one ext4 filesystem, normalizer units run on the host.
+      Do not relax the kill switch, port bindings or guards to make it pass.
 - [ ] **Sonarr** — skipped by choice; blocked on the Jellyseerr `fetch failed`
       (URL field, not the key — see manual 10f introspection snippet). Then:
       root folder `/data/media/tv`, download client `gluetun:8080` category

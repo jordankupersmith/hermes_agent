@@ -52,6 +52,14 @@ The scripts assume two machines in the same model as the original:
   dedicated deploy key (`/etc/media-vm/deploy_ed25519`, root-owned);
 - root on the host for the apply/diag scripts.
 
+The guest is the topology of record, **not a requirement**: a single-host
+install is supported as long as qBittorrent still has no network identity of its
+own (it shares gluetun's namespace), the VPN kill switch is proven with the
+tunnel down, admin ports are never on the LAN, and the firewall guards are
+carried over to the host. The VM adds a boundary, snapshots and a separate SSH
+key layer — defence-in-depth, not the property that keeps torrent traffic off
+the ISP link. See `TODO.md` → "Deployment topologies" for the acceptance list.
+
 ```bash
 cd SystemBuild
 bash phase5_guardrail_test.sh          # offline gate: want VERIFY_FAILS=0

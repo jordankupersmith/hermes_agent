@@ -1669,6 +1669,81 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G24 complete: fix 61 present"
 
 # ======================================================================
+section "G25 — 2026-11-20 fix 69 (a qBt category path is opt-in for *arr adds)"
+# Radarr sends only `category` (no savepath/autoTMM), so qBittorrent files the
+# add in MANUAL torrent-management mode and ignores the category savePath
+# unless Session\UseCategoryPathsInManualMode is on — default off. A correct
+# category path therefore still landed in the default save path. The fix is a
+# live preference write, and it must be part of first-run, not tribal memory.
+QBT="$SCRIPT_DIR/qbt_admin.sh"
+LSTAT="$SCRIPT_DIR/library_status.sh"
+CHK_OK=1
+
+if [ -f "$QBT" ]; then
+    if grep -Fq -- '--fix-category-paths)' "$QBT" \
+       && grep -Fq 'use_category_paths_in_manual_mode' "$QBT" \
+       && grep -Fq 'app/setPreferences' "$QBT"; then
+        pass "qbt_admin.sh has --fix-category-paths (live setPreferences, no restart)"
+    else
+        fail "qbt_admin.sh lost --fix-category-paths — new adds ignore the category path again"
+        CHK_OK=0
+    fi
+    if grep -Fq 'MISMATCH — the preference did not persist' "$QBT" \
+       && grep -Fq 'UseCategoryPathsInManualMode' "$QBT"; then
+        pass "the write is verified by reading the preference back, and the switch is documented"
+    else
+        fail "the preference write is unverified — an HTTP 200 is not evidence it persisted"
+        CHK_OK=0
+    fi
+    if grep -Fq -- '--first-run)' "$QBT" \
+       && grep -Fq 'cmd_category radarr' "$QBT" \
+       && grep -Fq 'cmd_radarr_category radarr' "$QBT" \
+       && grep -Fq 'cmd_category_paths' "$QBT"; then
+        pass "--first-run runs all three steps (category, movieCategory, path mode)"
+    else
+        fail "--first-run is missing or incomplete — a fresh install can half-configure again"
+        CHK_OK=0
+    fi
+else
+    fail "qbt_admin.sh not found next to the guardrail"
+    CHK_OK=0
+fi
+
+if [ -f "$LSTAT" ]; then
+    if grep -Fq 'use_category_paths_in_manual_mode' "$LSTAT" \
+       && grep -Fq -- '--fix-category-paths' "$LSTAT"; then
+        pass "library_status.sh reports the path mode and names the fix"
+    else
+        fail "library_status.sh no longer shows why a torrent sits outside its category path"
+        CHK_OK=0
+    fi
+else
+    fail "library_status.sh not found next to the guardrail"
+    CHK_OK=0
+fi
+
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq -- '--first-run' "$MANUAL" \
+       && grep -Fq -- '--fix-category-paths' "$MANUAL" \
+       && grep -Fq 'FIX 69' "$MEMORY"; then
+        pass "manual 10c instructs --first-run and PROJECT_MEMORY records fix 69"
+    else
+        fail "fix 69 is not actionable from the runbook (the next build repeats it)"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix-69 doc checks skipped"
+fi
+
+if [ -f "$SCRIPT_DIR/tests/test_qbt.py" ]; then
+    pass "tests/test_qbt.py covers the path-mode branches"
+else
+    fail "tests/test_qbt.py is missing — the check/verify branches are untested"
+    CHK_OK=0
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G25 complete: fix 69 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="
