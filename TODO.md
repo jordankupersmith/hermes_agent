@@ -79,6 +79,13 @@ Details: manual **Step 10** (10a–10i).
       the key is absent/`false` or the duplicate exists. Gate: after an apply,
       `qbt_admin.sh --status` must show the real path and
       `on disk: UseCategoryPathsInManualMode=true`.
+- [ ] **Decide on the `Session\Interface=tun0` pin for existing installs.** A
+      fresh pre-seed now writes it into the **real** conf (fix 72), so new
+      deployments get the app-level bind; this VM does not, and the diag says so
+      as a `note`. The netns is the actual boundary, so this is belt-and-braces —
+      but either add the migration to `phase5_apply.sh` (converges every install)
+      or drop the claim from the compose header. Do not add it blind: a stale
+      interface name can stall a running client.
 - [ ] **End-to-end request** + hardlink proof (`n=2`, same inode) (10d).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL

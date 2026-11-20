@@ -235,7 +235,7 @@ if [ "$SSH_UP" -eq 1 ]; then
     if [ -n "$QB1" ] && [ -n "$QB2" ]; then
         pass "qBittorrent.conf pins Session\Interface(+Name)=tun0 (5.x [BitTorrent] schema)"
     else
-        note "qBt tun0 bind not found (conf not pre-seeded yet — first apply incomplete?)"
+        note "no Session\Interface pin in the real conf — the netns is the boundary; a fresh pre-seed adds it (fix 72)"
     fi
     if [ -n "$QB3" ]; then
         pass "qBittorrent.conf Session\DefaultSavePath=/data/torrents"
