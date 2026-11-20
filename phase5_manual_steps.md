@@ -1793,20 +1793,33 @@ back and because **12.x requires a full library scan afterwards**.
 | --- | --- |
 | Video | untouched (`-c:v copy`) — no quality loss, no re-encode cost |
 | Audio | **exactly one track**: the best non-commentary track in the film's **original language** (the language of the first non-commentary audio stream, which is what remuxes carry first). A codec the TV can decode is copied; **TrueHD / Atmos / DTS-HD are never copied** — they are re-encoded to **AC3 5.1 @ 640k** (MKV) or **AAC 5.1 @ 384k** (MP4) |
-| Subtitles | **all embedded tracks removed**. Latin American Spanish comes from **Bazarr** as an external `.srt` |
+| Subtitles | **the Spanish tracks are kept**; every other subtitle language is dropped. Bazarr *additionally* supplies Latin American Spanish as an external `.srt` |
 | Filename | never changes (same path/extension) so Radarr's file record stays valid |
 
-**Why subtitles must be external.** An MKV tags subtitles as `spa` — there is no
-es-ES vs es-419 distinction in the container. Keeping "the Spanish track" would
-sometimes give you Castilian. Bazarr can target the `Spanish (Latin America)`
-provider result explicitly, and Jellyfin serves an external `.srt` instantly
-(no demux pass over a 40 GB file).
+**Why es-LA is still the preferred subtitle (fix 78 changed this).** An MKV tags
+subtitles as `spa` — there is no es-ES vs es-419 distinction in the container, so
+an embedded Spanish track may be Castilian. The original rule therefore dropped
+**all** embedded subtitles. **The owner reversed that on 2026-11-20:** a Spanish
+track that is present is worth keeping, and the embedded track is a fallback
+while Bazarr's `Spanish (Latin America)` `.srt` is the preferred one (Jellyfin
+serves an external `.srt` instantly — no demux pass over a 40 GB file).
+
+So the normalizer now keeps `spa` / `es` / `es-XX` subtitle tracks (it never
+treats `esp`, Esperanto, as Spanish) and drops the rest. Consequences to expect:
+
+- `subs:2->2` in the log is **correct** when both are Spanish;
+- `subs:2->0` is correct when neither was Spanish;
+- a **non-Spanish** subtitle in a library file means the policy was not applied —
+  diag S11 fails on it and prints the languages;
+- titles normalized **before** 2026-11-20 (*Project Hail Mary*, *The Breakfast
+  Club*, *Ferris Bueller's Day Off*) legitimately have **0** embedded subtitles.
+  **Do not re-download or re-remux them for subtitles**; Bazarr covers them.
 
 **So "the film has no subtitles" is two different questions (fix 77).** After a
-remux, `ffprobe` correctly reports **0 subtitle streams** — that is the policy,
-not a fault; the releases usually arrive with two (`subs:2->0` in the log). What
-matters is whether Bazarr put the external file beside it. One command answers
-both, per title:
+remux the file may legitimately carry **0 subtitle streams**: either the source
+had none in Spanish, or it was normalized under the old rule (before fix 78).
+What matters for those titles is whether Bazarr put the external file beside it.
+One command answers both, per title:
 
 ```bash
 sudo bash bazarr_status.sh "ferris"      # a title term, not a hardcoded film

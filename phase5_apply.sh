@@ -1354,10 +1354,14 @@ systemctl restart torrent-port-guard.service >/dev/null 2>&1 \
 #     DTS-HD (those cannot be decoded by a TV and force a transcode): a
 #     compatible codec is stream-copied, anything exotic is re-encoded to
 #     AC3 5.1 (MKV) / AAC 5.1 (MP4);
-#   * ZERO embedded subtitle tracks. Latin American Spanish cannot be selected
-#     from an MKV: the tag is just `spa`, so es-ES and es-419 are
-#     indistinguishable. Bazarr supplies `Spanish (Latin America)` as an
-#     external .srt, which Jellyfin serves instantly (no demux pass);
+#   * Spanish subtitle tracks are KEPT (fix 78, owner decision 2026-11-20).
+#     The earlier rule dropped ALL embedded subtitles because an MKV tags them
+#     `spa` and cannot distinguish es-ES from es-419, so an embedded track may be
+#     Castilian. The owner's call: a Spanish track that is present is worth
+#     keeping, and it is still only a fallback — Bazarr supplies
+#     `Spanish (Latin America)` as an external .srt, which Jellyfin prefers and
+#     serves instantly. Everything non-Spanish is still dropped, so a 36-subtitle
+#     remux becomes at most its Spanish tracks;
 #   * video is stream-copied and the filename/extension never changes, so
 #     Radarr's file record stays valid.
 # fix 61 (2026-11-18) — remuxes lie about their own shape:
@@ -1377,7 +1381,8 @@ systemctl restart torrent-port-guard.service >/dev/null 2>&1 \
 # uses) — no new image, no new port, no new LAN surface.
 cat >/usr/local/sbin/media-normalize <<'MEDNORMEOF'
 #!/usr/bin/env bash
-# fix 59 — normalize media to the household policy (one audio, no embedded subs).
+# fix 59/78 — normalize media to the household policy: one audio, and
+# Spanish subtitles kept while every other subtitle language is dropped.
 set -uo pipefail
 RE_IMG="jellyfin/jellyfin:12.4"
 LOG=/var/log/media-normalize.log
@@ -1440,11 +1445,12 @@ probe_cnt() {   # probe_cnt <file> <a|s|v> -> stream count
 }
 
 # decide: original-language audio + whether a re-encode is needed
-plan() {    # plan <file>
-    probe "$1" | python3 -c '
-import json,sys
+plan() {    # plan <file> [ext]
+    EXT="${2:-}" probe "$1" | EXT="${2:-}" python3 -c '
+import json,os,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(1)
+EXT=(os.environ.get("EXT") or "").lower()
 st=d.get("streams") or []
 au=[s for s in st if s.get("codec_type")=="audio"]
 su=[s for s in st if s.get("codec_type")=="subtitle"]
@@ -1476,14 +1482,39 @@ same.sort(key=lambda s:((s.get("codec_name") or "").lower() in COMPAT,
 k=same[0]
 codec=(k.get("codec_name") or "").lower()
 copy_ok = codec in COMPAT
-# one audio AND one video (a leftover cover-art stream still needs a pass)
-need = 0 if (len(au)==1 and len(su)==0 and copy_ok and nv==1) else 1
+
+# fix 78 — KEEP the Spanish subtitles, drop every other language.
+# An MKV tag is just `spa`, so this track may be Castilian; the owner decided a
+# present Spanish track is worth keeping, with Bazarr es-LA as the preferred
+# external file. Matching is on the ISO values ffprobe actually emits:
+#   spa (639-2), es (639-1), es-ES / es-419 / es-MX (BCP-47), "spanish".
+# NB: `esp` is Esperanto in 639-2 — never treat it as Spanish.
+TEXTSUB=("subrip","srt","ass","ssa","mov_text","webvtt","text","microdvd",
+         "subviewer","hdmv_text_subtitle")
+def is_es(s):
+    l=tag(s,"language").strip().lower()
+    return l in ("spa","es","spanish") or l.startswith("es-")
+keep=[s for s in su if is_es(s)]
+if EXT=="mp4":
+    # MP4 cannot carry bitmap subtitles (PGS/VobSub) and needs mov_text for text.
+    carry=[s for s in keep if (s.get("codec_name") or "").lower() in TEXTSUB]
+else:
+    carry=keep
+dropped=len(su)-len(carry)
+uncarry=len(keep)-len(carry)
+# need=0 only when nothing is left to do: one audio, one video, no subtitle
+# outside the policy, and a codec the TV decodes (otherwise a remux is required).
+need = 0 if (len(au)==1 and dropped==0 and copy_ok and nv==1) else 1
 print("PLAN_LANG=%s" % lang)
 print("PLAN_CODEC=%s" % codec)
 print("PLAN_INDEX=%d" % int(k.get("index")))
 print("PLAN_VIDX=%d" % int(vi[0].get("index")))
 print("PLAN_COPY=%d" % (1 if copy_ok else 0))
 print("PLAN_SUBS=%d" % len(su))
+print("PLAN_SUBKEEP=%d" % len(carry))
+print("PLAN_SUBDROP=%d" % dropped)
+print("PLAN_UNCARRY=%d" % uncarry)
+print("PLAN_SUBIDX=%s" % ",".join(str(int(s.get("index"))) for s in carry))
 print("PLAN_AUDIO=%d" % len(au))
 print("PLAN_NEED=%d" % need)
 print("PLAN_OK=1")
@@ -1502,7 +1533,7 @@ for root in $ROOTS; do
         sig=$(stat -c '%Y:%s' "$f" 2>/dev/null)
         [ "$(cat "$STATE/$key" 2>/dev/null)" = "$sig" ] && continue
 
-        P="$(plan "$f")"
+        P="$(plan "$f" "${f##*.}")"
         case "$P" in *PLAN_OK=1*) ;; *) log "skip(probe): $f"; continue ;; esac
         eval "$P"
         if [ "$PLAN_NEED" = "0" ]; then
@@ -1535,7 +1566,16 @@ for root in $ROOTS; do
         fi
 
         args=(-hide_banner -v error -y -i "$f" -map "0:$PLAN_VIDX" -map "0:$PLAN_INDEX"
-              -map_metadata 0 -sn -dn)
+              -map_metadata 0 -dn)
+        # fix 78 — map every Spanish subtitle track the output container can
+        # carry. `-sn` is gone: the policy is now "keep spa, drop the rest", so
+        # the selection happens here, by absolute stream index (never 0:s:0,
+        # which counts only subtitle streams and would pick the wrong one when
+        # the file also carries non-Spanish subs).
+        if [ -n "${PLAN_SUBIDX:-}" ]; then
+            IFS=',' read -ra SUBIDX <<<"$PLAN_SUBIDX"
+            for i in "${SUBIDX[@]}"; do args+=(-map "0:$i"); done
+        fi
         if [ "$PLAN_COPY" = "1" ]; then
             args+=(-c:v copy -c:a copy)
         elif [ "$ext" = "mp4" ]; then
@@ -1543,20 +1583,28 @@ for root in $ROOTS; do
         else
             args+=(-c:v copy -c:a ac3 -ac 6 -b:a 640k)
         fi
+        # MKV keeps the subtitle streams byte-for-byte; MP4 can only carry text,
+        # so those are converted to mov_text (bitmaps were excluded in plan).
+        if [ "${PLAN_SUBKEEP:-0}" -gt 0 ]; then
+            if [ "$ext" = "mp4" ]; then args+=(-c:s mov_text)
+            else args+=(-c:s copy); fi
+        fi
         [ "$ext" = "mp4" ] && args+=(-movflags +faststart)
         args+=("$tmp")
 
-        log "remux: $f (orig_lang=$PLAN_LANG audio=$PLAN_CODEC copy=$PLAN_COPY audio_tracks:$PLAN_AUDIO->1 subs:$PLAN_SUBS->0)"
+        log "remux: $f (orig_lang=$PLAN_LANG audio=$PLAN_CODEC copy=$PLAN_COPY audio_tracks:$PLAN_AUDIO->1 subs:$PLAN_SUBS->$PLAN_SUBKEEP es; dropped=$PLAN_SUBDROP uncarryable=$PLAN_UNCARRY)"
         if ! docker run --rm --entrypoint "$FFMPEG" -v "$dir":"$dir" "$RE_IMG" \
                 "${args[@]}" >>"$LOG" 2>&1; then
             rm -f "$tmp"; log "fail(ffmpeg): kept original: $f"; continue
         fi
-        # verify BEFORE replacing: 1 audio, 0 subs, 1 video, and the output's
-        # FILM stream within 5 s of the source's (fix 61: not the container —
-        # a longer dub track or cover art must not count as the runtime)
+        # verify BEFORE replacing: 1 audio, 1 video, exactly the Spanish
+        # subtitles we mapped (fix 78 — the expected count is what the plan
+        # selected, not a hard-coded 0), and the output's FILM stream within 5 s
+        # of the source's (fix 61: not the container — a longer dub track or
+        # cover art must not count as the runtime)
         d2=$(probe_vdur "$tmp")
         a2=$(probe_cnt "$tmp" a); s2=$(probe_cnt "$tmp" s); v2=$(probe_cnt "$tmp" v)
-        if [ "$a2" = "1" ] && [ "$s2" = "0" ] && [ "$v2" = "1" ] \
+        if [ "$a2" = "1" ] && [ "$s2" = "$PLAN_SUBKEEP" ] && [ "$v2" = "1" ] \
            && [ -n "$d1" ] && [ -n "$d2" ] \
            && [ "$d2" -ge $((d1 - 5)) ] && [ "$d2" -le $((d1 + 5)) ]; then
             mv -f "$tmp" "$f" && chown 1001:1001 "$f" 2>/dev/null || true
@@ -1564,7 +1612,7 @@ for root in $ROOTS; do
             log "done: $f (audio:$a2 subs:$s2 video:$v2 dur:${d1}s->${d2}s)"
         else
             rm -f "$tmp"
-            log "fail(verify a=$a2 s=$s2 v=$v2 dur=${d1}->${d2}): kept original: $f"
+            log "fail(verify a=$a2 s=$s2 v=$v2 want_s=$PLAN_SUBKEEP dur=${d1}->${d2}): kept original: $f"
         fi
     done < <(find "$root" -type f \( -iname '*.mkv' -o -iname '*.mp4' \) -print0 2>/dev/null)
 done
@@ -1574,7 +1622,7 @@ chmod 700 /usr/local/sbin/media-normalize
 
 cat >/etc/systemd/system/media-normalize.service <<'MEDNORMUNITEOF'
 [Unit]
-Description=SystemBuild media normalization (one audio, no TrueHD/Atmos, no embedded subs)
+Description=SystemBuild media normalization (one audio, no TrueHD/Atmos, Spanish subs only)
 Documentation=file:///usr/local/sbin/media-normalize
 After=docker.service local-fs.target
 Wants=docker.service

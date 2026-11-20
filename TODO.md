@@ -101,6 +101,21 @@ Details: manual **Step 10** (10a–10i).
       `qbt_admin.sh --remove-torrent "breakfast club" --yes` and the same for
       `ferris`. Worth a sentence in the report: the hardlink is what keeps the
       *remux peak* at 2 copies instead of 3.
+- [ ] **Subtitle policy reversed (fix 78) — new titles keep their Spanish subs.**
+      Owner decision 2026-11-20: embedded `spa`/`es`/`es-XX` subtitle tracks are
+      KEPT (a possibly-Castilian track beats none); every other language is still
+      dropped, and Bazarr's es-LA `.srt` stays the preferred file. The normalizer,
+      its verify gate, diag S11, AGENTS.md Rule 2b, manual 10i and G21 were all
+      re-pinned. **The three existing films stay at 0 embedded subtitles** (owner:
+      do not redownload) — Bazarr covers them, which is exactly why the fix-77
+      check matters. Next real import is the first proof the new rule runs.
+- [ ] **Install the reversed rule into media-vm.** The scripts live in the repo
+      and the *units* come from `phase5_apply.sh`; the normalizer binary itself is
+      rewritten by an apply:
+      `sudo bash phase5_step1_install.sh` then
+      `sudo bash /usr/local/sbin/phase5/phase5_apply.sh` (VERIFY_FAILS=0), then
+      `sudo bash /usr/local/sbin/phase5/phase5_diag.sh` (S11 now reports subtitle
+      languages).
 - [ ] **Confirm the normalizer handled both new titles.** The library file is
       still exactly the torrent's size (6.68 GiB) and its mtime is 11 min after
       the import, which is consistent with a remux that had nothing to drop (a

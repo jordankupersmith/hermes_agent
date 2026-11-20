@@ -27,6 +27,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | *Ferris Bueller's Day Off* (radarrId 2) | 100% and importing; `/data/torrents/movies` (category path) |
 | Hardlink policy (fix 76) | **`copyUsingHardlinks=True` — my first diagnosis was wrong.** The 41 G -> 61 G jump is the fix-59 remux replacing the library inode (`remux:`/`done:` in the log for both titles), so each title exists twice until its torrent is removed. Removing both returns ~14.8 GiB; the hardlink is what keeps the remux peak at 2 copies instead of 3 |
 | Normalizer | **both titles done** — BC `audio_tracks:1->1 subs:2->0` `dur:5817s->5817s`; Ferris `audio_tracks:2->1 subs:2->0` `dur:6180s->6180s`; verify shows `audio 1 / subs 0 / video 1` |
+| Subtitle policy (fix 78) | **reversed by the owner 2026-11-20**: embedded `spa`/`es`/`es-XX` tracks are now KEPT, other languages dropped; the es-LA `.srt` from Bazarr is preferred, not exclusive. Normalizer + verify + diag S11 + AGENTS Rule 2b + manual 10i + G21 re-pinned. The three existing films keep 0 embedded subs (do not redownload) |
 
 ## Next commands (2026-11-20, in order)
 

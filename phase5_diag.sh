@@ -742,10 +742,10 @@ else
     note "host vpn.env missing (a successful apply creates the skeleton)"
 fi
 # -----------------------------------------------------------------------------
-# S11 — media normalization (fix 59): one audio, no TrueHD/Atmos, no embedded subs
+# S11 — media normalization (fix 59/78): one audio, no TrueHD/Atmos, Spanish subs only
 # -----------------------------------------------------------------------------
 echo
-echo "--- S11: media normalization (fix 59) ---"
+echo "--- S11: media normalization (fix 59/78) ---"
 if [ "$SSH_UP" -eq 1 ]; then
     MNS="$(vmrun "sudo stat -c '%U:%G %a' /usr/local/sbin/media-normalize 2>/dev/null")"
     [ "$MNS" = "root:root 700" ] && pass "media-normalize script root:root 700" \
@@ -762,13 +762,28 @@ if [ "$SSH_UP" -eq 1 ]; then
     echo "  recent normalizer log (track counts only, never media content):"
     vmrun 'sudo tail -n 5 /var/log/media-normalize.log 2>/dev/null' | sed 's/^/    /'
     # visibility only (not a FAIL): the newest library file's stream shape.
-    # "audio=1 subs=0" is the target; a fresh import is expected to show more
-    # until the next sweep picks it up.
+    # fix 78 — the target is audio=1 and *Spanish-only* subtitles. A 0 is fine
+    # (the source had none, or they were only a fallback), but a non-Spanish
+    # subtitle track means the policy was not applied, so say that explicitly
+    # instead of printing a 0 that cannot distinguish the two.
     NEWF="$(vmrun "sudo find /data/media/movies -type f \\( -iname '*.mkv' -o -iname '*.mp4' \\) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-")"
     if [ -n "$NEWF" ]; then
         NA="$(vmrun "sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe -v '$NEWF':'$NEWF':ro jellyfin/jellyfin:12.4 -v error -select_streams a -show_entries stream=index -of csv=p=0 '$NEWF' 2>/dev/null | grep -c .")"
         NS="$(vmrun "sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe -v '$NEWF':'$NEWF':ro jellyfin/jellyfin:12.4 -v error -select_streams s -show_entries stream=index -of csv=p=0 '$NEWF' 2>/dev/null | grep -c .")"
-        note "newest library file streams: audio=${NA:-?} subs=${NS:-?} (target audio=1 subs=0)"
+        # Which languages are those subtitle tracks? "subs=2" is the new GOOD
+        # shape when both are spa; "subs=1" is a FAILURE when it is eng.
+        NLANGS="$(vmrun "sudo docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffprobe -v '$NEWF':'$NEWF':ro jellyfin/jellyfin:12.4 -v error -select_streams s -show_entries stream=index:stream_tags=language -of csv=p=0 '$NEWF' 2>/dev/null | cut -d, -f2 | tr '[:upper:]' '[:lower:]' | paste -sd, -")"
+        NSUB="${NS:-0}"
+        if [ "$NSUB" = "0" ]; then
+            note "newest library file: audio=${NA:-?} subs=0 (policy allows Spanish subs; none in the source — Bazarr must supply the .srt)"
+        else
+            NONES="$(printf '%s' "${NLANGS:-}" | tr ',' '\n' | grep -vE '^(spa|es|es-.*|spanish)$' | grep -c . || true)"
+            if [ "${NONES:-0}" -eq 0 ]; then
+                pass "newest library file: audio=${NA:-?} subs=$NSUB all Spanish (${NLANGS:-?}) — fix 78 shape"
+            else
+                fail "newest library file has $NONES non-Spanish subtitle track(s) (${NLANGS:-?}) — policy not applied"
+            fi
+        fi
     fi
 else
     note "S11 skipped (VM unreachable)"

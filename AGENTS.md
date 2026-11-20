@@ -56,22 +56,34 @@ dies **before `PlaybackInfo`** and nothing appears in `log_YYYYMMDD.log` at
 auto-resolved alternative versions and some titles reappear as *newly added*.
 Manual **Step 10h** has the details.
 
-## Rule 2b — library files are rewritten on purpose (fix 59)
+## Rule 2b — library files are rewritten on purpose (fix 59, amended by fix 78)
 
 A **`media-normalize`** unit pair inside `media-vm` rewrites every title once so
 it matches the household policy: **exactly one audio track** (the best
 non-commentary track in the film's original language, and never TrueHD/Atmos/
-DTS-HD — those are re-encoded to AC3 5.1), and **zero embedded subtitles**
-because **Latin American Spanish** cannot be selected from an MKV (`spa` is
-`spa`; es-ES and es-419 are indistinguishable). Bazarr supplies es-LA as an
-external `.srt`.
+DTS-HD — those are re-encoded to AC3 5.1), and **only the Spanish subtitle
+tracks** — every other subtitle language is dropped. Bazarr additionally
+supplies **Latin American Spanish** as an external `.srt`, which Jellyfin
+prefers.
+
+**Spanish subs are kept, not stripped (owner decision 2026-11-20, fix 78).**
+An MKV tags subtitles `spa` and cannot distinguish es-ES from es-419, so an
+embedded track may be Castilian. The owner's ruling: a Spanish track that is
+present is worth keeping; the external es-LA `.srt` is the preferred one, not
+the only one. So:
+
+- `subs: 2` in the log is now a **normal, correct** result when both are `spa`;
+- a **non-Spanish** subtitle in a library file means the policy was not applied
+  (diag S11 fails on it);
+- older files made under the old rule legitimately have **0 subtitles** —
+  *The Breakfast Club*, *Ferris Bueller's Day Off* and *Project Hail Mary* are
+  in that state on purpose. **Do not re-download or re-remux them** to add
+  subtitles; Bazarr covers them with the external file.
 
 That means a 43 GB remux becoming a **~32 GB** single-audio MKV is **expected**
-(the video stream is copied byte-for-byte — only the extra audio and subtitle
-tracks are dropped; the saving is whatever those tracks cost, not the dubbing
-"quality"), and "subtitles are missing inside the file" is **expected** too. Do
-not re-add audio or subtitle streams, and do not expect the file to shrink to
-~12 GB. Check state with:
+(the video stream is copied byte-for-byte — only the extra audio and non-Spanish
+subtitle tracks are dropped; the saving is whatever those tracks cost, not the
+dubbing "quality"). Check state with:
 
 ```bash
 ssh -i /etc/media-vm/deploy_ed25519 -o IdentitiesOnly=yes \

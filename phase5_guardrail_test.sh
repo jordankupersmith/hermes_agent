@@ -1429,7 +1429,7 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G20 complete: fix 58 present"
 
 # ======================================================================
-section "G21 — 2026-11-18 fix 59 (media normalization: one audio, no TrueHD, no embedded subs)"
+section "G21 — 2026-11-18 fix 59/78 (one audio, no TrueHD, Spanish subs kept)"
 # Why: Radarr/quality profiles can only refuse releases — they cannot strip
 # streams. Every imported file is rewritten once so the house never plays a
 # 11-audio/36-subtitle remux, and Latin American Spanish comes from Bazarr as
@@ -1437,13 +1437,33 @@ section "G21 — 2026-11-18 fix 59 (media normalization: one audio, no TrueHD, n
 CHK_OK=1
 
 # 1. the script is embedded and carries every policy decision
+# fix 78 (owner decision 2026-11-20): Spanish subtitles are KEPT. The old
+# assertion pinned `-sn`, so it would have failed the corrected policy — and,
+# worse, would have kept it from ever being introduced.
 if grep -Fq '/usr/local/sbin/media-normalize' "$APPLY" \
    && grep -Fq 'COMPAT=("ac3","eac3","aac","mp3","opus","flac")' "$APPLY" \
    && grep -Fq -- '-map "0:$PLAN_INDEX"' "$APPLY" \
-   && grep -Fq -- '-sn -dn' "$APPLY"; then
-    pass "normalizer keeps one original-language audio track and drops ALL embedded subtitles"
+   && grep -Fq -- '-map "0:$i"' "$APPLY" \
+   && grep -Fq -- '-c:s copy' "$APPLY" \
+   && ! grep -Fq -- '-sn -dn' "$APPLY"; then
+    pass "normalizer keeps one original-language audio track and the Spanish subtitle tracks"
 else
-    fail "normalizer policy missing (audio selection / -sn subtitle drop)"
+    fail "normalizer subtitle policy is not 'keep Spanish, drop the rest' (fix 78)"
+    CHK_OK=0
+fi
+if grep -Fq 'def is_es(s):' "$APPLY" \
+   && grep -Fq 'l in ("spa","es","spanish") or l.startswith("es-")' "$APPLY" \
+   && grep -Fq '# NB: `esp` is Esperanto in 639-2' "$APPLY"; then
+    pass "Spanish detection covers spa/es/es-XX and refuses esp (Esperanto)"
+else
+    fail "subtitle language matching is wrong — a Castilian track could be dropped, or Esperanto kept"
+    CHK_OK=0
+fi
+if grep -Fq 'want_s=$PLAN_SUBKEEP' "$APPLY" \
+   && ! grep -Fq '"$s2" = "0"' "$APPLY"; then
+    pass "verify compares against the PLANNED Spanish count, not a hard-coded 0 (fix 78)"
+else
+    fail "verify still demands 0 subtitles — every kept Spanish track fails the gate"
     CHK_OK=0
 fi
 COMPAT_LINE="$(grep -oE 'COMPAT=\([^)]*\)' "$APPLY" | head -n1)"
@@ -2120,6 +2140,61 @@ else
     note "docs absent next to the guardrail (installed copy) — fix 77 doc checks skipped"
 fi
 [ "$CHK_OK" -eq 1 ] && pass "G31 complete: fix 77 present"
+
+# ======================================================================
+section "G32 — 2026-11-20 fix 78 (owner policy: keep the Spanish subtitles)"
+# The owner reversed "drop every embedded subtitle": an MKV `spa` track may be
+# Castilian, but a present Spanish track beats nothing when Bazarr finds nothing.
+# The blast radius of that decision includes the GATE that encoded the old rule
+# (G21 asserted `-sn`), the diag's "target subs=0" line, and AGENTS.md.
+CHK_OK=1
+if [ -f "$SCRIPT_DIR/tests/test_norm_plan.py" ] \
+   && grep -Fq 'esp is Esperanto' "$SCRIPT_DIR/tests/test_norm_plan.py" \
+   && grep -Fq '"PLAN_SUBIDX") == "3,4"' "$SCRIPT_DIR/tests/test_norm_plan.py" \
+   && python3 "$SCRIPT_DIR/tests/test_norm_plan.py" >/dev/null 2>&1; then
+    pass "offline suite pins the selection: spa/es-419 kept by absolute index, esp refused (fix 78)"
+else
+    fail "tests/test_norm_plan.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+if grep -Fq 'non-Spanish subtitle track' "$DIAG" \
+   && grep -Fq 'stream_tags=language' "$DIAG" \
+   && grep -Fq '[ "${NONES:-0}" -eq 0 ]' "$DIAG"; then
+    pass "diag S11 probes subtitle LANGUAGES and fails on a non-Spanish track (fix 78)"
+else
+    fail "S11 cannot tell a correct 2-Spanish file from a policy failure"
+    CHK_OK=0
+fi
+if [ -f "$AGENTS" ]; then
+    if grep -Fq 'only the Spanish subtitle' "$AGENTS" \
+       && grep -Fq 'Do not re-download or re-remux them' "$AGENTS" \
+       && grep -Fq 'fix 78' "$AGENTS"; then
+        pass "AGENTS.md carries the amended rule AND the do-not-redownload note (fix 78)"
+    else
+        fail "AGENTS.md still tells the next agent that subtitles must be stripped"
+        CHK_OK=0
+    fi
+else
+    note "AGENTS.md absent next to the guardrail — fix 78 handover check skipped"
+fi
+if [ -f "$MANUAL" ]; then
+    if grep -Fq 'subs:2->2' "$MANUAL" && grep -Fq 'owner reversed that on 2026-11-20' "$MANUAL"; then
+        pass "manual 10i states the expected log shapes under the new rule (fix 78)"
+    else
+        fail "the runbook still implies a library file must have 0 subtitles"
+        CHK_OK=0
+    fi
+else
+    note "manual absent next to the guardrail — fix 78 doc check skipped"
+fi
+if [ -f "$MEMORY" ] && grep -Fq 'FIX 78' "$MEMORY" \
+   && grep -Fq 'Superseded in part by fix 78' "$MEMORY"; then
+    pass "PROJECT_MEMORY records fix 78 and marks fix 59 as partly superseded"
+else
+    fail "fix 59 still reads as current policy — the next agent will re-apply it"
+    CHK_OK=0
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G32 complete: fix 78 present"
 
 # ======================================================================
 echo
