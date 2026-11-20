@@ -1342,7 +1342,7 @@ It is one atomic operation, because the two halves are useless apart:
 | 2 | `POST /api/v2/app/setPreferences` → `web_ui_password` (plaintext over the VM-only port; qBittorrent hashes it with PBKDF2 itself) |
 | 3 | proves it with a **fresh login** — a live cookie would keep working even if the value were dropped |
 | 4 | stores it in `/etc/media-vm/qbt_webui_password` (**600 root:root**) *before* touching Radarr, so any later failure is recoverable |
-| 5 | `PUT`s it into Radarr's download client |
+| 5 | `PUT`s it into Radarr's download client with `?forceSave=true` — its save-time test would fail while the ban is live |
 | 6 | restarts qBittorrent (the login-ban list is in memory only) |
 | 7 | requires Radarr's own `testall` to print `isValid=True` |
 

@@ -194,11 +194,15 @@ if mode == "radarr":
             f["value"] = new
     c["fields"] = fields
 
-    st, body = rd(base, key, "/api/v3/downloadclient/%d" % cid, "PUT", c)
-    print("  PUT downloadclient/%d -> HTTP %s%s"
-          % (cid, st, " (202 = saved)" if 200 <= int(st) < 300 else ""))
+    # ?forceSave=true is required here: Radarr tests the client on save, and
+    # while the ban is still live that test fails and the PUT answers 400 — which
+    # would abort before the restart that clears the ban. forceSave stores the
+    # value without testing it; the testall AFTER the restart is the gate.
+    st, body = rd(base, key, "/api/v3/downloadclient/%d?forceSave=true" % cid, "PUT", c)
+    print("  PUT downloadclient/%d?forceSave=true -> HTTP %s%s"
+          % (cid, st, " (202 = saved without a save-time test)" if 200 <= int(st) < 300 else ""))
     if not (200 <= int(st) < 300):
-        print("  Radarr rejected it (it tests the client on save):")
+        print("  Radarr rejected the update:")
         print("   ", json.dumps(body)[:700] if isinstance(body, (dict, list)) else body)
         raise SystemExit(8)
 

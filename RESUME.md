@@ -15,7 +15,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | The film | **normalized**: `audio 1 / subtitle 0 / video 1`, **32 GB** (was 41 GB), `dur:9391s->9391s`; `…es-MX.hi.srt` (117 KB) beside it; **`missing: []`** (was `missing=['ea']`) |
 | Media normalizer (fix 59+61) | **installed + applied**; `timer` + `path` **active**; first good run `22:59:52Z` |
 | Disk | `/data` **32 G used, 53 G free (38%)** — the 41 GiB torrent copy was removed with its data |
-| Guardrail | `VERIFY_FAILS=0`; fix-61 assertions added, mutation test **7/7** |
+| Guardrail | `VERIFY_FAILS=0`; **G25** (fix 69) mutation-tested 6/6, **G26** (fixes 70/71) 11/11 — two of those mutations caught greps that matched prose instead of code, which is the point of the protocol |
 | Repository | `git init -b main` done (commits `cc2e33d`, `db7c9bb`, `0e78996`, + fix 68); `tests/` holds the offline mock suites; **no remote yet**, license undecided |
 | Download client (fix 67) | **repaired 2026-11-20**: ban cleared by restart, then `PUT downloadclient/1 -> 202` and `testall isValid=True` |
 | qBt credential (fix 71) | **must be re-run after every recreate**: the temporary password is regenerated on each container start, so the 09:10 apply broke Radarr again (`isValid=False Authentication Failure`). `sudo bash qbt_admin.sh --set-password` makes it permanent (600 root-only file) |

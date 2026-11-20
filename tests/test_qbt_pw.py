@@ -301,12 +301,14 @@ pw = next((f.get("value") for f in st.client["fields"]
            if f.get("name") == "password"), None)
 check("fake Radarr stored the new password", pw == "new-pass-0123456789", pw)
 check("PUT went to downloadclient/1", bool(st.puts))
+check("forceSave is requested (the live ban would fail the save-time test)",
+      "forceSave=true" in r.stdout)
 check("does not disturb the other fields",
       next((f.get("value") for f in st.client["fields"]
             if f.get("name") == "movieCategory"), None) == "radarr")
 check("never prints the secret", "new-pass-0123456789" not in r.stdout + r.stderr)
 
-print("\n== radarr: a 400 (client test on save) is reported, not hidden ==")
+print("\n== radarr: a 400 is reported, not hidden ==")
 qbt = Qbt()
 st = Rd(qbt)
 st.accept_put = False

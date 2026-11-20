@@ -1782,9 +1782,10 @@ else
     CHK_OK=0
 fi
 if grep -Fq '"$TMP/pw.py" radarr' "$QBT" \
+   && grep -Fq '?forceSave=true" % cid' "$QBT" \
    && grep -Fq '"$TMP/pw.py" test' "$QBT" \
    && grep -Fq 'docker restart qbittorrent' "$QBT"; then
-    pass "--set-password is atomic: Radarr updated, ban cleared, testall required"
+    pass "--set-password is atomic: Radarr saved with forceSave, ban cleared, testall required"
 else
     fail "--set-password no longer updates Radarr / clears the ban / requires testall — a half-change re-creates the ban"
     CHK_OK=0
@@ -1802,7 +1803,8 @@ else
     fail "apply does not persist the manual-mode path switch — a rebuild reproduces fix 69"
     CHK_OK=0
 fi
-if grep -Fq 'UseCategoryPathsInManualMode=true' "$DIAG" \
+if grep -Fq 'QBCAT="$(vmrun' "$DIAG" \
+   && grep -Fq 'QBCAT_OFF=' "$DIAG" \
    && grep -Fq 'qbt_webui_password' "$DIAG"; then
     pass "phase5_diag.sh asserts the path switch on disk and the 600 credential file"
 else
