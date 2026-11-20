@@ -292,6 +292,29 @@ print(r.stdout.rstrip())
 check("exit 7", r.returncode == 7, r.returncode)
 check("says it did not take", "did not take" in r.stdout)
 
+def run_check(qbt, pw):
+    srv = serve_qbt(qbt)
+    r = subprocess.run(
+        [sys.executable, SCRIPT, "check",
+         "http://127.0.0.1:%d" % srv.server_address[1], "admin",
+         secret("chk", pw)], capture_output=True, text=True)
+    srv.shutdown()
+    return r
+
+
+print("\n== check: login after the restart with the stored password ==")
+qbt = Qbt(password="new-pass-0123456789")
+r = run_check(qbt, "new-pass-0123456789")
+print(r.stdout.rstrip())
+check("exit 0", r.returncode == 0, r.returncode)
+check("says it survived the restart", "after the restart: OK" in r.stdout)
+
+qbt = Qbt(password="rotated-temp")          # the write did NOT survive
+r = run_check(qbt, "new-pass-0123456789")
+print(r.stdout.rstrip())
+check("exit 7 on a lost write", r.returncode == 7, r.returncode)
+check("names the failure", "did not survive the restart" in r.stdout)
+
 print("\n== radarr: the new password is written and read back ==")
 qbt = Qbt(password="new-pass-0123456789")
 r, st = run_rd("radarr", qbt)

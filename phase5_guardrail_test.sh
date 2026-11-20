@@ -1832,6 +1832,82 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G26 complete: fixes 70/71 present"
 
 # ======================================================================
+section "G27 — 2026-11-20 fix 72/73 (the config PATH, and durability before restart)"
+# fix 72: the linuxserver image reads /config/qBittorrent/qBittorrent.conf (host:
+# .../qbittorrent/qBittorrent/qBittorrent.conf). The path WITHOUT that
+# subdirectory was a file our own pre-seed invented; qBittorrent never read it,
+# yet apply/diag/status "verified" it — three false PASSes and the repeated
+# "the path switch reverted" diagnosis. Every consumer must use the real path
+# and the ignored duplicate must not exist.
+# fix 73: setPreferences is buffered (~5 s) and a restart before the flush
+# loses it — the first --set-password did exactly that and left a stored
+# credential nothing accepted. The write must be proven ON DISK before the
+# restart, and the credential re-proven AFTER it.
+CHK_OK=1
+QBCF_REAL="/data/config/qbittorrent/qBittorrent/qBittorrent.conf"
+
+if grep -Fq "QBC=$QBCF_REAL" "$APPLY" \
+   && grep -Fq 'vmrun "sudo grep' "$APPLY" \
+   && grep -Fq 'QBC_LEGACY=' "$APPLY" \
+   && grep -Fq 'rm -f "$QBC_LEGACY"' "$APPLY"; then
+    pass "apply reads/writes the real config and retires the ignored duplicate (fix 72)"
+else
+    fail "apply does not target $QBCF_REAL — the path switch would be written to a file qBittorrent ignores"
+    CHK_OK=0
+fi
+if grep -Fq "$QBCF_REAL" "$DIAG" \
+   && grep -Fq 'vmrun "sudo grep' "$DIAG" \
+   && grep -Fq "test -f /data/config/qbittorrent/qBittorrent.conf" "$DIAG"; then
+    pass "diag checks the real config and fails on the ignored duplicate (fix 72)"
+else
+    fail "diag checks the wrong config path — a regression would pass the gate again"
+    CHK_OK=0
+fi
+if grep -Fq 'QBC_REAL=' "$QBT" \
+   && grep -Fq 'QBC_LEGACY=' "$QBT" \
+   && grep -Fq 'config file qBittorrent actually reads' "$QBT"; then
+    pass "qbt_admin.sh names both candidate paths in --status (fix 72)"
+else
+    fail "qbt_admin.sh cannot show which config file is live — the trap stays invisible"
+    CHK_OK=0
+fi
+if grep -Fq 'now="$(qbc_hash)"' "$QBT" \
+   && grep -Fq 'Password_PBKDF2 changed' "$QBT" \
+   && grep -Fq 'Do NOT restart qBittorrent' "$QBT"; then
+    pass "--set-password waits for the write to reach disk BEFORE any restart (fix 73)"
+else
+    fail "--set-password restarts without proving the write is on disk (the 2026-11-20 regression)"
+    CHK_OK=0
+fi
+if grep -Fq '"$TMP/pw.py" check' "$QBT" \
+   && grep -Fq 'if mode == "check":' "$QBT"; then
+    pass "the password is re-proven AFTER the restart (fix 73)"
+else
+    fail "no post-restart verification — a lost write looks like success"
+    CHK_OK=0
+fi
+if grep -Fq 'qb_candidates' "$QBT" \
+   && grep -Fq 'stored credential was stale' "$QBT" \
+   && grep -Fq 'qb_clogin' "$LSTAT"; then
+    pass "a stale stored credential cannot blind the diagnosis (both helpers fall back)"
+else
+    fail "one stale credential still disables every login — no fallback source"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 72' "$MEMORY" && grep -Fq 'FIX 73' "$MEMORY" \
+       && grep -Fq 'qBittorrent/qBittorrent.conf' "$MANUAL"; then
+        pass "PROJECT_MEMORY records fixes 72/73 and the manual names the real config path"
+    else
+        fail "fixes 72/73 are not actionable from the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix 72/73 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G27 complete: fixes 72/73 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

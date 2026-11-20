@@ -71,12 +71,14 @@ Details: manual **Step 10** (10a–10i).
       the torrent still landed in `/data/torrents`. Run
       `sudo bash qbt_admin.sh --fix-category-paths` (live, no restart) and
       confirm the next grab's `save_path`.
-      **fix 70:** the live value is not durable — a container recreate dropped
-      it to `False` (observed 2026-11-20). `phase5_apply.sh` now writes
-      `Session\UseCategoryPathsInManualMode=true` into `qBittorrent.conf` while
-      qBt is stopped, and `phase5_diag.sh` S3 fails if it is absent. Gate: after
-      an apply, `qbt_admin.sh --status` must show
-      `on disk : UseCategoryPathsInManualMode=true`.
+      **fix 70/72:** it was never applied — the key was written to a
+      `qBittorrent.conf` **outside** the `qBittorrent/` subdirectory, which the
+      app never reads (fix 72). `phase5_apply.sh` now writes it to
+      `/data/config/qbittorrent/qBittorrent/qBittorrent.conf` while qBt is
+      stopped and retires the ignored duplicate; `phase5_diag.sh` S3 fails if
+      the key is absent/`false` or the duplicate exists. Gate: after an apply,
+      `qbt_admin.sh --status` must show the real path and
+      `on disk: UseCategoryPathsInManualMode=true`.
 - [ ] **End-to-end request** + hardlink proof (`n=2`, same inode) (10d).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL

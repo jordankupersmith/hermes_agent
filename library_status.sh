@@ -132,6 +132,11 @@ qb_pass() {
     return 0
 }
 
+qb_clogin() {  # qb_clogin <password> — one attempt, prints "Ok."/"Fails."/ban text
+    qb /api/v2/auth/login --data-urlencode 'username=admin' \
+       --data-urlencode "password=$1" --data 'referer=http://localhost:8080/'
+}
+
 qb_login() {
     local v
     v="$(qb /api/v2/app/version 2>/dev/null)"
@@ -139,13 +144,28 @@ qb_login() {
     local pass
     pass="$(qb_pass)"
     [ -n "$pass" ] || die "no qBittorrent password (set QB_PASS=..., or run qbt_admin.sh --set-password)"
-    local r
-    r="$(qb /api/v2/auth/login --data-urlencode 'username=admin' \
-            --data-urlencode "password=$pass" --data 'referer=http://localhost:8080/')"
+    local r; r="$(qb_clogin "$pass")"
     case "$r" in
-        Ok*) echo "  qBittorrent login: OK" ;;
-        *)   die "qBittorrent login failed ($r) — password or Host header rejected" ;;
+        Ok*) echo "  qBittorrent login: OK"; return 0 ;;
+        *banned*|*Banned*)
+            die "this host's source IP is BANNED by qBittorrent — restart it with --fix-qbt-auth, then re-run" ;;
     esac
+    # fix 73 — a stale stored credential must not blind the diagnosis. One extra
+    # attempt from the OTHER source (one failure is cheap; the ban needs 5).
+    local t; t="$(qbt_temp_password)"
+    if [ -n "$t" ] && [ "$t" != "$pass" ]; then
+        r="$(qb_clogin "$t")"
+        case "$r" in
+            Ok*)
+                echo "  qBittorrent login: OK (the stored credential was stale;"
+                echo "  the container log's temporary password works — fix "
+                echo "  it with: sudo bash qbt_admin.sh --set-password)"
+                return 0 ;;
+            *banned*|*Banned*)
+                die "this host's source IP is BANNED by qBittorrent — restart it with --fix-qbt-auth, then re-run" ;;
+        esac
+    fi
+    die "qBittorrent login failed ($r) — password or Host header rejected"
 }
 
 # ---- 1. Radarr: does it know the title, and does it think it has a file? ----

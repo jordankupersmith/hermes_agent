@@ -18,8 +18,8 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Guardrail | `VERIFY_FAILS=0`; **G25** (fix 69) mutation-tested 6/6, **G26** (fixes 70/71) 11/11 — two of those mutations caught greps that matched prose instead of code, which is the point of the protocol |
 | Repository | `git init -b main` done (commits `cc2e33d`, `db7c9bb`, `0e78996`, + fix 68); `tests/` holds the offline mock suites; **no remote yet**, license undecided |
 | Download client (fix 67) | **repaired 2026-11-20**: ban cleared by restart, then `PUT downloadclient/1 -> 202` and `testall isValid=True` |
-| qBt credential (fix 71) | **must be re-run after every recreate**: the temporary password is regenerated on each container start, so the 09:10 apply broke Radarr again (`isValid=False Authentication Failure`). `sudo bash qbt_admin.sh --set-password` makes it permanent (600 root-only file) |
-| qBt category paths (fix 70) | **live value was lost by the recreate** (`False` after `up -d`); apply now writes it into `qBittorrent.conf` while qBt is stopped, diag fails without it. After an apply: `qbt_admin.sh --status` must show `on disk : …=true` |
+| qBt credential (fix 71/73) | first `--set-password` set it, "verified" it, then **lost it to a restart 3 s later** (settings flush at 5 s) — the stored file held a password nothing accepted. Fixed: the write is proven on disk *before* the restart and re-proven *after* it |
+| qBt config path (fix 72) | **the file we wrote for weeks is not read by the app**: qBittorrent uses `/data/config/qbittorrent/qBittorrent/qBittorrent.conf` (subdirectory). That was the real cause of "the path switch reverts". apply/diag/--status now target the real path and the apply retires the ignored duplicate |
 | *The Breakfast Club* (radarrId 3) | **orphaned at 34.3%** during the credential outage: Radarr removed the queue row, the torrent kept downloading. Fix the credential, then at 100% run `qbt_admin.sh --import-downloads "/data/torrents/<torrent folder>"` (a normal queue import will not happen) |
 
 ## Next commands (2026-11-20, in order)

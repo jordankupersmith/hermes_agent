@@ -1122,8 +1122,18 @@ chown -R 1001:1001 /data
 # ---- C. qBittorrent.conf pre-seed (ONLY when absent — never overwrite).
 # fix 5: correct qBt 5.x schema — the network bind, save path and listen port
 # all live under [BitTorrent]/Session\* keys; the old bare [Session]/Interface
-# and SessionPort keys were silently IGNORED by qBt 5.x. ----
-QBC=/data/config/qbittorrent/qBittorrent.conf
+# and SessionPort keys were silently IGNORED by qBt 5.x.
+# fix 72 — THE PATH MATTERS: the linuxserver image runs with $HOME=/config and
+# its own service script greps `WebUI\Address` out of
+# /config/qBittorrent/qBittorrent.conf, i.e. the file lives in the qBittorrent/
+# SUBDIRECTORY. The old path here (without it) was a file our own pre-seed
+# invented: qBittorrent never read it, so every key written to it — including
+# Session\Interface and the manual-mode path switch — changed nothing while the
+# read-back "verified" it. The port only worked because compose passes
+# TORRENTING_PORT on the command line. ----
+QBC=/data/config/qbittorrent/qBittorrent/qBittorrent.conf
+QBC_LEGACY=/data/config/qbittorrent/qBittorrent.conf
+mkdir -p /data/config/qbittorrent/qBittorrent
 if [ ! -f "$QBC" ]; then
     cat >"$QBC" <<'QBEOF'
 [BitTorrent]
@@ -1136,6 +1146,24 @@ Session\UseCategoryPathsInManualMode=true
 WebUI\Port=8080
 QBEOF
     chown 1001:1001 "$QBC"
+    chmod 600 "$QBC"
+fi
+# fix 72 — retire the ignored duplicate. It was created by an earlier version of
+# this script, qBittorrent never reads it, and keeping it has already produced
+# three wrong diagnoses (apply V4, diag S3, and "the path switch reverted").
+# Only removed when the real conf is present, so we can never delete the only
+# copy. Its Session\*/WebUI\* lines are carried over first when the real conf
+# lacks them.
+if [ -f "$QBC_LEGACY" ] && [ -f "$QBC" ]; then
+    LEGACY_KEYS="$(grep -aE '^(Session|WebUI)\\' "$QBC_LEGACY" 2>/dev/null || true)"
+    if [ -n "$LEGACY_KEYS" ]; then
+        printf '%s\n' "$LEGACY_KEYS" | while IFS= read -r line; do
+            key="${line%%=*}"
+            grep -qF "$key=" "$QBC" 2>/dev/null || printf '%s\n' "$line" >>"$QBC"
+        done
+    fi
+    rm -f "$QBC_LEGACY"
+    echo "qBittorrent.conf retired the ignored duplicate $QBC_LEGACY (fix 72)"
 fi
 # fix 52 — idempotent migration for VMs provisioned before the AirVPN
 # forwarded port existed (pre-seed above is absence-guarded and never re-runs).
@@ -2323,7 +2351,7 @@ if [ "${HOLD_VM:-0}" -eq 0 ]; then
     # fix-54 repair only rewrote an existing line, so the 2026-11-15 apply went
     # green while the conf had no key at all (qBittorrent defaulted to 6881 and
     # dropped it again on exit). Assert the on-disk value here, not just in diag.
-    QBP_VM="$(vmrun "grep -F 'Session\Port=' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null | head -n1 | cut -d= -f2" 2>/dev/null)"
+    QBP_VM="$(vmrun "sudo grep -F 'Session\Port=' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null | head -n1 | cut -d= -f2" 2>/dev/null)"
     if [ "$QBP_VM" = "37686" ]; then
         pass "qBittorrent.conf pins Session\\Port=37686 (numeric — fix 56)"
     else

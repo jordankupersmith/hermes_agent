@@ -225,13 +225,13 @@ if [ "$SSH_UP" -eq 1 ]; then
     fi
     # fix 5 — assert the qBt 5.x [BitTorrent] Session\* schema (fixed-string
     # greps over ssh; single backslashes survive the double-quoted command)
-    QB1="$(vmrun "grep -F 'Session\Interface=tun0' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
-    QB2="$(vmrun "grep -F 'Session\InterfaceName=tun0' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
-    QB3="$(vmrun "grep -F 'Session\DefaultSavePath=/data/torrents' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
-    QBO="$(vmrun "grep -F 'SessionPort' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QB1="$(vmrun "sudo grep -F 'Session\Interface=tun0' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QB2="$(vmrun "sudo grep -F 'Session\InterfaceName=tun0' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QB3="$(vmrun "sudo grep -F 'Session\DefaultSavePath=/data/torrents' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QBO="$(vmrun "sudo grep -F 'SessionPort' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
     # fix 52 — the single AirVPN forwarded port is pinned in the 5.x schema
-    QBP="$(vmrun "grep -F 'Session\Port=37686' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
-    QBP_OLD="$(vmrun "grep -F 'Session\Port=6881' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QBP="$(vmrun "sudo grep -F 'Session\Port=37686' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QBP_OLD="$(vmrun "sudo grep -F 'Session\Port=6881' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
     if [ -n "$QB1" ] && [ -n "$QB2" ]; then
         pass "qBittorrent.conf pins Session\Interface(+Name)=tun0 (5.x [BitTorrent] schema)"
     else
@@ -266,14 +266,22 @@ if [ "$SSH_UP" -eq 1 ]; then
     # fix 70 — the durable copy of the manual-mode path switch. Without it every
     # Radarr/Sonarr add (category only, no savepath/autoTMM) lands in the
     # session save path and the category's /data/torrents/<kind> is ignored.
-    QBCAT="$(vmrun "grep -F 'Session\UseCategoryPathsInManualMode=true' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
-    QBCAT_OFF="$(vmrun "grep -F 'Session\UseCategoryPathsInManualMode=false' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QBCAT="$(vmrun "sudo grep -F 'Session\UseCategoryPathsInManualMode=true' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QBCAT_OFF="$(vmrun "sudo grep -F 'Session\UseCategoryPathsInManualMode=false' /data/config/qbittorrent/qBittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
     if [ -n "$QBCAT" ]; then
         pass "qBittorrent.conf Session\\UseCategoryPathsInManualMode=true (fix 70)"
     elif [ -n "$QBCAT_OFF" ]; then
         fail "qBittorrent.conf sets UseCategoryPathsInManualMode=false — *arr adds ignore the category path (fix 70)"
     else
         fail "qBittorrent.conf has no UseCategoryPathsInManualMode key — *arr adds ignore the category path (fix 70)"
+    fi
+    # fix 72 — the file without the qBittorrent/ subdirectory is NOT read by the
+    # app. It was created by an earlier apply, and checking it produced three
+    # false PASSes and two wrong diagnoses, so its return is a failure now.
+    if vmrun 'test -f /data/config/qbittorrent/qBittorrent.conf' 2>/dev/null; then
+        fail "the IGNORED duplicate /data/config/qbittorrent/qBittorrent.conf exists — qBittorrent never reads it (fix 72)"
+    else
+        pass "no ignored qBittorrent.conf duplicate outside the qBittorrent/ subdirectory (fix 72)"
     fi
     # fix 56 — the conf value is only real if the process LISTENS on it inside
     # gluetun's netns (that is the interface AirVPN forwards to). /proc/net/tcp

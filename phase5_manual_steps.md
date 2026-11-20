@@ -1326,31 +1326,39 @@ search. Four preconditions, all inside Radarr/Jellyseerr:
 
 ### 10b. qBittorrent WebUI password
 
-**Short answer: do not use the GUI, and do not use the temporary password.**
-Run this once per deployment, after Radarr's download client already works
-(10a):
+**The config file is in the `qBittorrent/` subdirectory** — this matters more than
+it sounds:
+
+| Path | Read by qBittorrent? |
+| --- | --- |
+| `/data/config/qbittorrent/qBittorrent/qBittorrent.conf` | **yes** (the image runs with `$HOME=/config`; its service script greps `WebUI\Address` here) |
+| `/data/config/qbittorrent/qBittorrent.conf` | **no** — an artifact of an earlier `phase5_apply.sh`; retired by fix 72 |
+
+Anything written to the second path looks verified (you read your own value
+back) and changes nothing. `phase5_diag.sh` now fails if that duplicate exists.
+
+**Set the password with the script, not the GUI:**
 
 ```bash
 sudo bash qbt_admin.sh --set-password
 ```
 
-It is one atomic operation, because the two halves are useless apart:
+One atomic operation, in this order because each step protects the next:
 
 | Step | What it does |
 | --- | --- |
-| 1 | logs in with the current credential **from the host** (a different source IP than Radarr, so a Radarr ban cannot block the repair) |
-| 2 | `POST /api/v2/app/setPreferences` → `web_ui_password` (plaintext over the VM-only port; qBittorrent hashes it with PBKDF2 itself) |
-| 3 | proves it with a **fresh login** — a live cookie would keep working even if the value were dropped |
-| 4 | stores it in `/etc/media-vm/qbt_webui_password` (**600 root:root**) *before* touching Radarr, so any later failure is recoverable |
-| 5 | `PUT`s it into Radarr's download client with `?forceSave=true` — its save-time test would fail while the ban is live |
-| 6 | restarts qBittorrent (the login-ban list is in memory only) |
-| 7 | requires Radarr's own `testall` to print `isValid=True` |
+| 1/5 | logs in with the current credential **from the host** (a different source IP than Radarr, so a Radarr ban cannot block the repair) |
+| — | `POST /api/v2/app/setPreferences` → `web_ui_password` (plaintext over the VM-only port; qBittorrent hashes it with PBKDF2 itself) and proves it with a **fresh login** |
+| 2/5 | **waits until `Password_PBKDF2` in the real conf has changed** and aborts *without restarting* if it does not — settings are buffered and written ~5 s late, so a restart inside that window loses the password (**fix 73**) |
+| 3/5 | stores it in `/etc/media-vm/qbt_webui_password` (**600 root:root**) and `PUT`s it into Radarr with `?forceSave=true` (its save-time test would fail while the ban is live) |
+| 4/5 | restarts qBittorrent (the login-ban list is in memory only) |
+| 5/5 | logs in **again** with the stored password, then requires Radarr's own `testall` to print `isValid=True` |
 
 Read the value with `sudo cat /etc/media-vm/qbt_webui_password`; every helper
-reads it automatically (`$QB_PASS` first, then the file, then the log, then a
-prompt). Re-running is safe and idempotent — it reads the stored password and
-rewrites Radarr. `QB_NEW_PASS=...` supplies your own (minimum 12 characters),
-`--no-restart` skips step 6.
+reads it automatically (`$QB_PASS` first, then that file, then the container log,
+then a prompt) and **self-heals** the file if a stale copy is ever rejected.
+Re-running is idempotent. `QB_NEW_PASS=...` supplies your own (minimum 12
+characters), `--no-restart` skips step 4.
 
 **Why this replaces the temporary password (fix 71).** With no password
 configured, qBittorrent prints a **session-scoped** temporary password on every
@@ -1368,13 +1376,17 @@ Invariants while you are in that UI:
 - Never change the password **in the UI** without Radarr: a half-done change
   re-creates the ban within a minute. Use the command above.
 
+If the script reports that the password is live but not on disk, do **not**
+restart qBittorrent (that is what loses it); check that uid 1001 can write
+`/data/config/qbittorrent/qBittorrent/qBittorrent.conf` and re-run.
+
 If the temporary line is gone and you have no password file (e.g. an older
 install), reset it — **stop the container first** (qBittorrent dumps its
-in-memory conf on SIGTERM; see §3j):
+in-memory conf on SIGTERM; see §3j) — and delete the hash from the **real** path:
 
 ```bash
 sudo docker stop qbittorrent
-sudo sed -i '/^WebUI\\Password_PBKDF2=/d' /data/config/qbittorrent/qBittorrent.conf
+sudo sed -i '/^WebUI\\Password_PBKDF2=/d' /data/config/qbittorrent/qBittorrent/qBittorrent.conf
 sudo docker start qbittorrent
 sudo docker logs qbittorrent 2>&1 | grep -i temporary
 ```
@@ -1446,16 +1458,19 @@ The individual commands remain available (`--create-category`,
 preference live (no restart), verifies it by reading it back, and exits 2 if a
 category still has no `savePath`. All of it affects **new** adds only.
 
-**fix 70 — the durable copy is `qBittorrent.conf`, not the live value.**
-qBittorrent keeps settings in memory and writes them ~5 s after a change
-(`SettingsStorage`) plus once on a clean shutdown, so a live API write can be
-lost by a container recreate: observed 2026-11-20, `True` before `up -d`
-recreated qbittorrent and `False` after. `phase5_apply.sh` therefore writes
-`Session\UseCategoryPathsInManualMode=true` into the conf **while qBittorrent is
-stopped**, `phase5_diag.sh` S3 fails if the key is absent or `false`, and
-`qbt_admin.sh --status` prints both the live and the on-disk value. If it reads
-`False` after a rebuild, the apply step was skipped — re-run apply, then
-`--first-run`.
+**fix 70/72 — the durable copy is `qBittorrent.conf`, and only the one in the
+`qBittorrent/` subdirectory counts.** Settings are buffered in memory and written
+~5 s after a change (`SettingsStorage`), so a live API write can be lost by a
+recreate — but the deeper trap was the path: the file *without* the subdirectory
+is never read, so writes there were invisible no matter how they were verified
+(observed 2026-11-20: live `True` before `up -d`, `False` after, while the
+ignored file said `true`). `phase5_apply.sh` writes
+`Session\UseCategoryPathsInManualMode=true` into
+`/data/config/qbittorrent/qBittorrent/qBittorrent.conf` **while qBittorrent is
+stopped**, `phase5_diag.sh` S3 fails if the key is absent/`false` **or** if the
+ignored duplicate exists, and `qbt_admin.sh --status` prints both candidate paths
+with their keys. If the live value reads `False` after a rebuild, the apply step
+was skipped — re-run apply, then `--first-run`.
 
 ### 10d. End-to-end test + hardlink proof
 

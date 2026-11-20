@@ -34,6 +34,16 @@ ENVF=/opt/media-assistant/.env
 # reports the ban as "Authentication Failure". One stored credential removes the
 # whole class. Root-only, same directory and mode as vpn.env.
 QBPWF=/etc/media-vm/qbt_webui_password
+# fix 72 — where qBittorrent ACTUALLY keeps its config. The linuxserver image
+# runs with $HOME/$XDG_CONFIG_HOME=/config and its own service script greps
+# `WebUI\Address` out of /config/qBittorrent/qBittorrent.conf, i.e.
+#   /data/config/qbittorrent/qBittorrent/qBittorrent.conf   (host)
+# The path WITHOUT the subdirectory is a file this project's pre-seed invented
+# and qBittorrent never reads. Writes there look verified (we read our own
+# value back from it) and change nothing — that is how the manual-mode path
+# switch "reverted" twice (fix 70) and why three diag PASSes were false.
+QBC_REAL=/data/config/qbittorrent/qBittorrent/qBittorrent.conf
+QBC_LEGACY=/data/config/qbittorrent/qBittorrent.conf
 JAR="$(mktemp)"
 TMP="$(mktemp -d)"
 trap 'rm -f "$JAR"; rm -rf "$TMP"' EXIT
@@ -175,6 +185,17 @@ if mode == "set":
     print("  fresh login with the new password: OK")
     raise SystemExit(0)
 
+if mode == "check":
+    base, user = sys.argv[2].rstrip("/"), sys.argv[3]
+    pw = secret(sys.argv[4])
+    _, st, body = login(base, user, pw)
+    if body == "Ok.":
+        print("  login with the stored password after the restart: OK")
+        raise SystemExit(0)
+    print("  login after the restart FAILED (HTTP %s, %r) — the write did not"
+          " survive the restart" % (st, body[:120]))
+    raise SystemExit(7)
+
 if mode == "radarr":
     base = sys.argv[2].rstrip("/")
     key, new = secret(sys.argv[3]), secret(sys.argv[4])
@@ -293,26 +314,68 @@ qb_pass() {
     return 0
 }
 
+qb_candidates() {
+    # One "<source>\t<password>" line per available credential, in priority
+    # order. Used by qb_login, which tries the next source only if the previous
+    # one is rejected (one extra failed login is harmless: the ban needs 5).
+    if [ -n "${QB_PASS:-}" ]; then
+        printf 'env\t%s\n' "$QB_PASS"
+    fi
+    if [ -r "$QBPWF" ]; then
+        local p; p="$(head -n1 "$QBPWF" 2>/dev/null)"
+        [ -n "$p" ] && printf 'file\t%s\n' "$p"
+    fi
+    local t
+    t="$(ssh "${K[@]}" "$VM" \
+        'sudo docker logs qbittorrent 2>&1 | grep -i "temporary password" | tail -1' \
+        2>/dev/null | sed -n 's/.*password[^:]*: *//p')"
+    [ -n "$t" ] && printf 'log\t%s\n' "$t"
+}
+
 qb_login() {
     # already authenticated? (subnet whitelist or a live session)
     local v
     v="$(qb /api/v2/app/version 2>/dev/null)"
     case "$v" in v*) echo "  qBittorrent $v (session already authorised)"; return 0 ;; esac
 
-    local pass
-    pass="$(qb_pass)"
-    [ -n "$pass" ] || die "no qBittorrent password available (set QB_PASS=..., or run --set-password)"
-
-    local r
-    r="$(qb /api/v2/auth/login --data-urlencode 'username=admin' \
-            --data-urlencode "password=$pass" --data 'referer=http://localhost:8080/')"
-    case "$r" in
-        Ok*) echo "  qBittorrent login: OK" ;;
-        *)   die "qBittorrent login failed ($r) — password or Host header rejected" ;;
-    esac
+    local src pass tried=0 r
+    while IFS=$'\t' read -r src pass; do
+        [ -n "${pass:-}" ] || continue
+        [ "$tried" -lt 2 ] || break
+        tried=$((tried + 1))
+        r="$(qb /api/v2/auth/login --data-urlencode 'username=admin' \
+                --data-urlencode "password=$pass" --data 'referer=http://localhost:8080/')"
+        case "$r" in
+            Ok*)
+                echo "  qBittorrent login: OK (source: $src)"
+                if [ "$src" != "file" ]; then
+                    # Self-heal. The stored file is what every later run reads
+                    # first, so a stale copy would repeat the failed login (and
+                    # eventually earn a ban) on every run.
+                    printf '%s\n' "$pass" > "$TMP/heal"; chmod 600 "$TMP/heal"
+                    if install -m 600 -o root -g root "$TMP/heal" "$QBPWF" 2>/dev/null; then
+                        echo "  stored credential was stale — refreshed from the $src source"
+                    fi
+                    rm -f "$TMP/heal"
+                fi
+                return 0 ;;
+            *banned*|*Banned*)
+                die "this host's source IP is BANNED by qBittorrent — restart it (library_status.sh --fix-qbt-auth), then retry" ;;
+        esac
+        echo "  the $src credential was rejected — trying the next source" >&2
+    done <<< "$(qb_candidates)"
+    die "qBittorrent login failed with every available credential (set QB_PASS=..., or run --set-password)"
 }
 
 rdk() { grep -m1 '^RADARR_API_KEY=' "$ENVF" 2>/dev/null | cut -d= -f2-; }
+
+qbc_hash() {
+    # The persisted WebUI hash (fix 73). Reading it back is how a setPreferences
+    # is proven to have reached DISK — qBittorrent buffers settings and writes
+    # them ~5 s later, so a restart in that window silently loses them.
+    ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+        "sudo grep -a 'Password_PBKDF2' $QBC_REAL 2>/dev/null | tail -n1" 2>/dev/null
+}
 
 # ---- commands ---------------------------------------------------------------
 cmd_status() {
@@ -366,6 +429,24 @@ for t in d:
         t.get("name","")[:46], t.get("state",""),
         (t.get("size") or 0)/2**30, t.get("category") or "-", t.get("save_path","")))
 '
+    echo "== config file qBittorrent actually reads =="
+    # fix 72 — the trap that cost three rounds: the app reads
+    # /config/qBittorrent/qBittorrent.conf (host: .../qbittorrent/qBittorrent/),
+    # so a key written to the file WITHOUT that subdirectory is invisible to it.
+    ssh "${K[@]}" -o ConnectTimeout=15 "$VM" bash -s -- "$QBC_REAL" "$QBC_LEGACY" <<'QBCEOF' 2>/dev/null
+for f in "$@"; do
+    if [ -f "$f" ]; then
+        echo "  $f"
+        sudo grep -aE 'Password_PBKDF2|UseCategoryPathsInManualMode|Session\\Port=' "$f" 2>/dev/null \
+            | sed 's/^/      /'
+        echo "      ($(stat -c '%s bytes, %U:%G %a, mtime %y' "$f" 2>/dev/null))"
+    else
+        echo "  $f  (absent)"
+    fi
+done
+QBCEOF
+    echo "  -> authoritative: $QBC_REAL (the qBittorrent/ subdirectory)"
+
     echo "== /data =="
     ssh "${K[@]}" "$VM" 'df -h /data | tail -1' 2>/dev/null | sed 's/^/  /'
 }
@@ -670,19 +751,24 @@ PY
 }
 
 cmd_set_password() {
-    # fix 71 — ONE operation, because the two halves are useless apart and the
-    # ordering is what makes it safe:
+    # fixes 71/73 — ONE operation, and the ordering is what makes it safe:
     #   1. prove the current credential from here (host IP - a different source
     #      from Radarr, so a Radarr ban does not block the repair);
     #   2. set the new one and PROVE it with a fresh login;
-    #   3. store it root-only BEFORE touching Radarr, so a later failure is
+    #   3. WAIT until the new hash is in qBittorrent.conf ON DISK. qBittorrent
+    #      flushes settings ~5 s after a change, so a restart before that loses
+    #      the password and the next start generates a fresh TEMPORARY one. This
+    #      is not theoretical: 2026-11-20 the first version restarted 3 s after
+    #      setPreferences, the new password vanished, and the stored file became
+    #      the only copy of a credential nothing accepted. Verified process,
+    #      remembered disk (fix 73);
+    #   4. store it root-only BEFORE touching Radarr, so a later failure is
     #      recoverable (every helper reads that file first);
-    #   4. rewrite Radarr's download client with it;
-    #   5. restart qBittorrent — the ban list is in memory, and Radarr's retries
-    #      created one while the two disagreed;
-    #   6. require Radarr's own saved-client test to pass before claiming done.
-    # Skipping 4 while doing 2 is exactly how the ban comes back: Radarr polls
-    # every ~60 s and bans its own source IP after 5 failures.
+    #   5. rewrite Radarr's download client (forceSave: its save-time test would
+    #      fail while the ban is live, and that must not abort the repair);
+    #   6. restart qBittorrent — the ban list is in memory;
+    #   7. verify the password AGAIN after the restart, then require Radarr's
+    #      own saved-client test to pass.
     local restart=1
     [ "${1:-}" = "--no-restart" ] && restart=0
 
@@ -704,28 +790,51 @@ cmd_set_password() {
     local key; key="$(rdk)"; [ -n "$key" ] || die "no RADARR_API_KEY in $ENVF"
     printf '%s' "$key" > "$TMP/rd.key"; chmod 600 "$TMP/rd.key"
 
-    echo "== 1/4 qBittorrent: set the WebUI password =="
+    local before; before="$(qbc_hash)"
+    [ -n "$before" ] || echo "  no Password_PBKDF2 in $QBC_REAL yet (temporary-password mode)"
+
+    echo "== 1/5 qBittorrent: set the WebUI password =="
     python3 "$TMP/pw.py" set "$QB" admin "$TMP/curpw" "$TMP/newpw" || exit $?
     rm -f "$TMP/curpw"
+
+    echo "== 2/5 wait for it to reach $QBC_REAL (qBittorrent flushes ~5 s late) =="
+    local now="" i
+    for i in $(seq 1 20); do
+        now="$(qbc_hash)"
+        [ -n "$now" ] && [ "$now" != "$before" ] && break
+        sleep 2
+    done
+    if [ -z "$now" ] || [ "$now" = "$before" ]; then
+        echo "  the new password is LIVE but NOT on disk after ~40 s."
+        echo "  Do NOT restart qBittorrent: the live value would be lost and the"
+        echo "  container would come back on a new temporary password."
+        echo "  Check that uid 1001 can write it:"
+        echo "    ssh ... 'sudo docker exec qbittorrent ls -l /config/qBittorrent/qBittorrent.conf'"
+        echo "  The stored credential file still matches the LIVE password, so"
+        echo "  --no-restart runs keep working while you fix that."
+        exit 7
+    fi
+    echo "  on disk: Password_PBKDF2 changed — durable before any restart"
 
     install -m 600 -o root -g root "$TMP/newpw" "$QBPWF" \
         || die "could not write $QBPWF (the password IS changed - fix that file)"
     echo "  stored: $QBPWF (600 root:root) - read first by this script and library_status.sh"
 
-    echo "== 2/4 Radarr: the same password in the download client =="
+    echo "== 3/5 Radarr: the same password in the download client =="
     python3 "$TMP/pw.py" radarr "$RD" "$TMP/rd.key" "$TMP/newpw"
     local rc=$?
     if [ "$rc" -ne 0 ]; then
         echo
-        echo "  the qBittorrent password IS changed and stored, but Radarr still has"
-        echo "  the old one (rc=$rc). Recover with the SAME command - it is idempotent:"
+        echo "  the qBittorrent password IS changed, durable and stored, but Radarr"
+        echo "  still has the old one (rc=$rc). Recover with the SAME command - it is"
+        echo "  idempotent:"
         echo "    sudo bash $0 --set-password"
         echo "  (it reads the stored password and rewrites Radarr)"
         exit "$rc"
     fi
 
     if [ "$restart" -eq 1 ]; then
-        echo "== 3/4 restart qBittorrent to clear the in-memory login-ban list =="
+        echo "== 4/5 restart qBittorrent to clear the in-memory login-ban list =="
         ssh "${K[@]}" "$VM" 'sudo docker restart qbittorrent >/dev/null && echo "  container restarted"' \
             || echo "  restart FAILED - Radarr may stay banned for up to an hour"
         local C=""
@@ -737,12 +846,30 @@ cmd_set_password() {
         echo "  WebUI after restart: HTTP ${C:-(no answer)}"
         [ "$C" = "200" ] || die "qBittorrent did not come back - check: docker logs qbittorrent"
     else
-        echo "== 3/4 restart skipped (--no-restart) - a ban, if any, stays =="
+        echo "== 4/5 restart skipped (--no-restart) - a ban, if any, stays =="
     fi
 
-    echo "== 4/4 Radarr's own saved-client test =="
+    echo "== 5/5 after the restart: same password, then Radarr's own client test =="
+    python3 "$TMP/pw.py" check "$QB" admin "$TMP/newpw"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "  the password did NOT survive the restart, so the disk write was not"
+        echo "  the one qBittorrent reads. The file is $QBC_REAL; run:"
+        echo "    sudo bash $0 --status            (prints both candidate paths)"
+        echo "  and keep --no-restart runs until that is resolved."
+        exit "$rc"
+    fi
     python3 "$TMP/pw.py" test "$RD" "$TMP/rd.key"
     rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "  testall is still invalid. A ban created between the write and the"
+        echo "  restart is the remaining explanation - clear it, then re-sync:"
+        echo "    sudo bash library_status.sh \"<title>\" --fix-qbt-auth"
+        echo "    sudo bash $0 --set-password --no-restart"
+        exit "$rc"
+    fi
     if [ "$rc" -ne 0 ]; then
         echo
         echo "  testall is still invalid. A ban created between the write and the"
