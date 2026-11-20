@@ -89,16 +89,18 @@ Details: manual **Step 10** (10a–10i).
       interface exists in the netns, or drop it and rely on the netns alone
       (which is the actual boundary). Do not remove it while the client is mid
       download.
-- [ ] **Diagnose the stalled downloads (both titles, 2026-11-20 11:2xZ).**
-      *Ferris Bueller's Day Off* is `stalledDL` at 8.1 GiB and *The Breakfast
-      Club* is at 77.6% with an ETA in days. `qbt_admin.sh --status` now answers
-      this: `connection_status` (`firewalled` = the AirVPN forward is not
-      reaching this tunnel — the forward is bound to the **key/server pair**, so
-      a server change invalidates it) and a per-tracker verdict (`NOT WORKING`
-      = dead tracker, `working` + `peers=0` = no seeders → pick another
-      release). Manual §3k. Record the outcome here: a port-forward fix must
-      update `FIREWALL_VPN_INPUT_PORTS`, `TORRENTING_PORT` and `Session\Port`
-      together.
+- [ ] **Let both titles finish, then prove the hardlink (2026-11-20 11:3xZ).**
+      The stall diagnosis came back clean: `connection_status=connected`,
+      ~1.3 MiB/s combined, 27 seeds, DHT 226 — the earlier `stalledDL` was swarm
+      timing, not the stack, and the live `Session\Interface=tun0` pin is not
+      hurting (this is the check that had to be made before trusting it).
+      *The Breakfast Club* ~20 min, *Ferris Bueller's Day Off* ~2 h 20 min.
+      **Both are in Radarr's queue again** (`downloading / downloading`), i.e. the
+      credential repair let Radarr re-adopt them — so Radarr imports both by
+      itself and `--import-downloads` is NOT needed (fix 75 makes it refuse while
+      a download is tracked). After each import: the normalizer rewrites the file
+      (new inode), then Jellyfin scan, then `library_status.sh <title>` = YES.
+      Hardlink proof *before* the normalizer runs: same inode, `n=2`.
 - [ ] **End-to-end request** + hardlink proof (`n=2`, same inode) (10d).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL

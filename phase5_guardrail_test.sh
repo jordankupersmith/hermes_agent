@@ -1966,6 +1966,59 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G28 complete: fix 74 present"
 
 # ======================================================================
+section "G29 — 2026-11-20 fix 75 (an orphan is a state, not a diagnosis)"
+# The credential repair let Radarr RE-ADOPT both torrents; the standing advice
+# "at 100% run --import-downloads" then pointed at a command that imports
+# whatever is on disk NOW (a partial file, or a race with Radarr's own import).
+# The tool must refuse that moment instead of documenting it. And the Radarr log
+# section printed stack FRAMES - no timestamp - so a pre-repair error looked live.
+CHK_OK=1
+if grep -Fq 'could import a PARTIAL' "$QBT" \
+   && grep -Fq 'force="${2:-}"' "$QBT" \
+   && grep -Fq '"$force" != "--force"' "$QBT"; then
+    pass "--import-downloads refuses while Radarr tracks an active download (fix 75)"
+else
+    fail "--import-downloads can still import a partial file / race Radarr's own import"
+    CHK_OK=0
+fi
+# Scoped to the function body: `api/v3/queue` also appears in --remove-torrent,
+# so a file-wide grep would stay green with the guard gutted (mutation M3 caught
+# exactly that on the first run).
+IMPORT_FN="$(sed -n '/^cmd_import_downloads()/,/^}/p' "$QBT")"
+if printf '%s' "$IMPORT_FN" | grep -Fq 'api/v3/queue' \
+   && printf '%s' "$IMPORT_FN" | grep -Fq '"downloading","queued"'; then
+    pass "the refusal is based on Radarr's live queue, not on a guess (fix 75)"
+else
+    fail "the import guard does not consult the queue"
+    CHK_OK=0
+fi
+if grep -Fq 'grep -aE "^[0-9]{4}-[0-9]{2}-[0-9]{2}' "$LSTAT" \
+   && grep -Fq 'stack frames were dropped' "$LSTAT"; then
+    pass "Radarr's log section prints dated HEADER lines, never bare stack frames (fix 75)"
+else
+    fail "an error from before a repair can still read as a current one (no timestamp)"
+    CHK_OK=0
+fi
+if grep -Fq 'RE-ADOPTS' "$LSTAT"; then
+    pass "the ORPHAN verdict says to look again before importing (fix 75)"
+else
+    fail "the ORPHAN verdict still sends the operator straight to --import-downloads"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 75' "$MEMORY" && grep -Fq -- '--force' "$MANUAL" \
+       && grep -Fq 're-adopt' "$MANUAL"; then
+        pass "PROJECT_MEMORY records fix 75 and the manual says to re-check the queue"
+    else
+        fail "the re-adoption behaviour is not documented where it is needed"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix 75 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G29 complete: fix 75 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

@@ -20,10 +20,11 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Download client (fix 67) | **repaired 2026-11-20**: ban cleared by restart, then `PUT downloadclient/1 -> 202` and `testall isValid=True` |
 | qBt credential (fix 71/73) | first `--set-password` set it, "verified" it, then **lost it to a restart 3 s later** (settings flush at 5 s) — the stored file held a password nothing accepted. Fixed: the write is proven on disk *before* the restart and re-proven *after* it |
 | qBt config path (fix 72) | **the file we wrote for weeks is not read by the app**: qBittorrent uses `/data/config/qbittorrent/qBittorrent/qBittorrent.conf` (subdirectory). That was the real cause of "the path switch reverts". apply/diag/--status now target the real path and the apply retires the ignored duplicate |
+| Transfer / VPN | **`connection_status=connected`**, ~1.3 MiB/s combined, 27 seeds, DHT 226 — the port-forward is fine and the now-live `Session\Interface=tun0` pin is not stalling anything (that had to be proven, manual §3k) |
 | Credential repair | **done 2026-11-20 11:1xZ**: durability gate passed (`Password_PBKDF2 changed — durable before any restart`), post-restart login OK, `testall isValid=True`. The fallback also fired once (`the file credential was rejected — trying the next source` → `refreshed from the log source`), which is fix 73 working |
 | qBt `--status` on-disk line (fix 74) | mis-pointed at the retired path for one run: it printed `ABSENT` while printing `=true` from the real file. Fixed — one reader (`qbc_key`), and `UNKNOWN` when it cannot look |
-| *The Breakfast Club* (radarrId 3) | **orphan at 77.6%** (6.68 GiB, `/data/torrents`), Radarr has no queue row. At 100%: `qbt_admin.sh --import-downloads "/data/torrents"` |
-| *Ferris Bueller's Day Off* | **`stalledDL`, 8.1 GiB, `cat=radarr`, `/data/torrents/movies`** — category path correct (the switch works), but no data moving. Diagnose with `qbt_admin.sh --status` → `connection_status` + tracker verdict (manual §3k) |
+| *The Breakfast Club* (radarrId 3) | **86.6%, tracked again** — the credential repair let Radarr re-adopt it (`queue: downloading / downloading`), so Radarr imports it itself at 100%. It sits in `/data/torrents` (added before the path switch); imports still hardlink. `--import-downloads` is no longer needed and now refuses while a download is tracked (fix 75) |
+| *Ferris Bueller's Day Off* (radarrId 2) | **44.5%, 8.11 GiB, `cat=radarr`, `/data/torrents/movies`** — the category path switch working in the field. Tracked by Radarr; auto-imports at completion |
 
 ## Next commands (2026-11-20, in order)
 

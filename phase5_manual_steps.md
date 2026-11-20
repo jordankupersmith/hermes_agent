@@ -1528,21 +1528,29 @@ was skipped — re-run apply, then `--first-run`.
 **If Radarr's queue row disappears while the torrent keeps going, the torrent is
 an orphan** — Radarr drops a tracked download when its download client is
 unreachable ("download was not found in the client"), and nobody imports it
-afterwards. Fix the credential (`qbt_admin.sh --set-password`), then when the
-torrent finishes:
+afterwards. Fix the credential (`qbt_admin.sh --set-password`), then **look at
+the queue again before importing**: once the client answers, Radarr normally
+**re-adopts** the torrent (the queue row returns, `downloading / downloading`)
+and imports it itself. Observed 2026-11-20 on both requested titles — the
+"orphan" verdict was correct when printed and wrong ten minutes later, because
+the repair had restored the client.
+
+Only if the row is **still** absent when the torrent completes:
 
 ```bash
 sudo bash qbt_admin.sh --import-downloads "/data/torrents/<torrent folder>"
 ```
 
-That queues Radarr's `DownloadedMoviesScan` on the folder and imports what it
-recognises (manual-import path — no queue row needed). Only `/data/torrents` is
-accepted. Radarr resolves the manual mode to **Move**, so with hardlinks on it
-hardlinks into the library and unlinks the torrent's copy: no data is
-duplicated, but the torrent then reports missing files and
-`--remove-torrent` will not return space (the library holds the inode). Do not
-run it while the torrent is still incomplete — Radarr would import a partial
-file.
+`--import-downloads` now **refuses** while Radarr is tracking any active
+download (fix 75); `--force` overrides that, and you should only want it after
+`library_status.sh` says the title is an orphan. That queues Radarr's
+`DownloadedMoviesScan` on the folder and imports what it recognises
+(manual-import path — no queue row needed). Only `/data/torrents` is accepted.
+Radarr resolves the manual mode to **Move**, so with hardlinks on it hardlinks
+into the library and unlinks the torrent's copy: no data is duplicated, but the
+torrent then reports missing files and `--remove-torrent` will not return space
+(the library holds the inode). Do not run it while the torrent is still
+incomplete — Radarr would import a partial file.
 
 One command on the VM (jordan can read `/data`) groups duplicates by inode:
 

@@ -974,13 +974,50 @@ cmd_import_downloads() {
     # ("download was not found in the client"), so a torrent that keeps
     # downloading afterwards is an ORPHAN: nobody imports it when it finishes.
     # DownloadedMoviesScan is the manual-import scanner and needs no queue row.
-    local path="${1:-/data/torrents}"
+    #
+    # fix 75 — but when Radarr IS tracking the download, this command is the
+    # wrong tool, and the failure mode is silent: it imports whatever is on disk
+    # NOW, i.e. possibly a partial file, while Radarr's own completed-download
+    # handling would have imported the finished one. Observed 2026-11-20: the
+    # previous advice said "at 100% run --import-downloads", then the credential
+    # repair let Radarr re-adopt BOTH torrents (queue rows back, "downloading
+    # / downloading"), so neither was an orphan any more. Hence: refuse while
+    # any tracked download is still in progress, unless --force.
+    local path="${1:-/data/torrents}" force="${2:-}"
     case "$path" in
         /data/torrents|/data/torrents/*) : ;;
         *) die "refusing to scan '$path' - only under /data/torrents" ;;
     esac
     local key; key="$(rdk)"; [ -n "$key" ] || die "no RADARR_API_KEY in $ENVF"
     printf '%s' "$key" > "$TMP/rd.key"; chmod 600 "$TMP/rd.key"
+
+    if [ "$force" != "--force" ]; then
+        local active
+        active="$(curl -sS -m 20 -H "X-Api-Key: $key" \
+            "$RD/api/v3/queue?pageSize=100&includeUnknownMovieItems=true" 2>/dev/null \
+            | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: raise SystemExit
+for r in d.get("records") or []:
+    st=(r.get("status") or "")
+    if st.lower() in ("downloading","queued","delay","downloadclientunavailable"):
+        pct = r.get("sizeleft")
+        print("  %-52s %-12s %s" % ((r.get("title") or "")[:52], st,
+              "" if pct is None else "left=%.2f GiB" % (pct/2**30)))
+' 2>/dev/null)"
+        if [ -n "$active" ]; then
+            echo "  Radarr is still tracking these downloads:"
+            printf '%s\n' "$active" | sed 's/^/  /'
+            echo
+            echo "  Radarr imports each one itself when it completes, so this"
+            echo "  scan is not needed — and running it now could import a PARTIAL"
+            echo "  file. Wait for the queue to empty, or use --force when the"
+            echo "  title is genuinely an orphan (library_status.sh verdict)."
+            return 0
+        fi
+    fi
+
     python3 "$TMP/pw.py" import "$RD" "$TMP/rd.key" "$path"
 }
 
@@ -995,7 +1032,7 @@ case "${1:-}" in
                          cmd_radarr_category "$2" ;;
     --first-run)         cmd_first_run ;;
     --set-password)      cmd_set_password "${2:-}" ;;
-    --import-downloads)  cmd_import_downloads "${2:-}" ;;
+    --import-downloads)  cmd_import_downloads "${2:-}" "${3:-}" ;;
     --fix-category-paths) cmd_category_paths ;;
     *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

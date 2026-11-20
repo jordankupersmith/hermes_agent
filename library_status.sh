@@ -430,12 +430,23 @@ else
     echo "  none in the recent container log"
 fi
 
-echo "== Radarr log about the download client (last 5) =="
+echo "== Radarr log about the download client =="
+# fix 75 — print the LOG HEADER line, never the stack frames. The header is the
+# only line that carries a timestamp; the frames are `at NzbDrone…` and were the
+# only thing this matched, so an error from BEFORE a repair read as a current
+# one and could not be dated. Radarr header shape:
+#   2026-11-20 09:02:11.4|Fatal|ConsoleApp|…|Authentication Failure
 RL="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
-    'sudo docker logs --tail 300 radarr 2>&1 | grep -aiE "qBittorrent|download client" | tail -5' \
+    'sudo docker logs --tail 4000 radarr 2>&1 \
+       | grep -aE "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+\|" \
+       | grep -aiE "qbittorrent|authentication failure|download client" \
+       | tail -5' \
     2>/dev/null)"
 if [ -n "${RL:-}" ]; then
-    printf '%s\n' "$RL" | cut -c1-260 | sed 's/^/  /'
+    printf '%s\n' "$RL" | cut -c1-250 | sed 's/^/  /'
+    echo "  (dated headers only — stack frames were dropped because they carry"
+    echo "   no timestamp. If the saved-client test above passes, an older line"
+    echo "   here is history, not a live fault.)"
 else
     echo "  none in the recent container log"
 fi
@@ -809,7 +820,11 @@ elif qt:
     print("  entry for it. Radarr removes a tracked download when its client is")
     print("  unreachable, so this torrent is an ORPHAN: it finishes but nobody")
     print("  imports it. Fix the credential (qbt_admin.sh --set-password), then")
-    print("  when the torrent completes run:")
+    print("  LOOK AGAIN before importing: once the client answers, Radarr usually")
+    print("  RE-ADOPTS the torrent and the queue row comes back, in which case")
+    print("  Radarr imports it itself and this command is the wrong tool (it")
+    print("  imports whatever is on disk NOW, partial file included). Only if the")
+    print("  row is still absent when the torrent completes, run:")
     print("    sudo bash qbt_admin.sh --import-downloads \"%s\""
           % (t.get("save_path") or "/data/torrents"))
 else:
