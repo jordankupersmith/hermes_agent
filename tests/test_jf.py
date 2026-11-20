@@ -44,6 +44,7 @@ class State:
         self.scans_started = 0
         self.valid_token = TOKEN
         self.items = ITEMS if items is None else items
+        self.items_direct = True   # False: /Items is empty, /Users/*/Items works
 
 def serve(state, port=0):
     class H(BaseHTTPRequestHandler):
@@ -66,8 +67,13 @@ def serve(state, port=0):
             if self.path == "/System/Configuration":
                 return self._json(200, {"ServerName": state.server_name,
                                         "UICulture": "en-US"})
-            if self.path.startswith("/Items"):
+            if self.path == "/Users":
+                return self._json(200, [{"Id": "u-1", "Name": "admin"}])
+            if self.path.startswith("/Users/") and "/Items" in self.path:
                 return self._json(200, state.items)
+            if self.path.startswith("/Items"):
+                return self._json(200, state.items if state.items_direct
+                                  else {"Items": []})
             if self.path == "/ScheduledTasks":
                 state.scan_polls += 1
                 # running for the first two polls, then idle
@@ -235,6 +241,22 @@ r = run(blk, port, "--subs")
 print(r.stdout.rstrip())
 check("exit 0", r.returncode == 0, r.returncode)
 check("says the stream is indexed", "verdict: 2 Spanish" in r.stdout)
+srv.shutdown()
+
+print("\n== 8. --subs falls back to /Users/<id>/Items when /Items is empty ==")
+st = State(items={"Items": ITEMS["Items"][:1]}); st.items_direct = False
+srv = serve(st); port = srv.server_address[1]
+blk = (raw.replace('("http://192.168.122.10:8096", "http://127.0.0.1:8096")',
+                   '("http://127.0.0.1:%d",)' % port)
+          .replace('DB   = "/data/config/jellyfin/data/jellyfin.db"',
+                   'DB   = %r' % dbpath)
+          .replace("time.sleep(10)", "time.sleep(0.05)"))
+r = run(blk, port, "--subs")
+print(r.stdout.rstrip())
+check("exit 0 through the fallback", r.returncode == 0, r.returncode)
+check("names the source it used", "source: /Users/u-1/Items" in r.stdout)
+check("still reports the Spanish streams", "verdict: 2 Spanish" in r.stdout)
+check("does not claim the library is empty", "returned no movies" not in r.stdout)
 srv.shutdown()
 
 print("\n%s" % ("ALL PASS" if not fails else "%d FAILURE(S)" % fails))

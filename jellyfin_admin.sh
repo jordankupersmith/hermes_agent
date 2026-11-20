@@ -155,12 +155,30 @@ if act == "--subs":
     # but Jellyfin must index them and parse the language out of the filename
     # suffix. ".es-MX.srt" is not an ISO code, so this is the one place that can
     # tell us whether the family will see "Spanish" or an undefined track.
-    st, data = api("/Items?Recursive=true&IncludeItemTypes=Movie"
-                   "&Fields=MediaSources,Path&Limit=200", token)
+    q = ("?Recursive=true&IncludeItemTypes=Movie"
+         "&Fields=MediaSources,Path&Limit=200")
+    st, data = api("/Items" + q, token)
     items = (data or {}).get("Items") or []
+    # An API key has no user attached on some builds, and /Items then returns an
+    # empty set (not an error). Retry through the first user before concluding
+    # the library is empty — a false "no movies" would look like a scan problem.
+    via = "/Items"
     if not items:
-        out("  Jellyfin returned no movies — has the library ever scanned?")
+        st, users = api("/Users", token)
+        for u in users or []:
+            if not u.get("Id"):
+                continue
+            st, data = api("/Users/%s/Items%s" % (u["Id"], q), token)
+            items = (data or {}).get("Items") or []
+            via = "/Users/%s/Items" % u["Id"]
+            if items:
+                break
+    if not items:
+        out("  Jellyfin returned no movies (%s and /Users/*/Items) — has the"
+            % via)
+        out("  library ever scanned? Nothing can be verified until it has.")
         sys.exit(6)
+    out("  source: %s" % via)
     SPANISH = {"spa", "es", "es-mx", "es-419", "ea", "spl", "es-la"}
     missing = 0
     for it in items:

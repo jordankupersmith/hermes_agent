@@ -2069,6 +2069,11 @@ suffix — which is the one failure a sidecar on disk cannot reveal. At the time
 of writing the suffixes were `Title.es.srt`, `Title.es-MX.srt` and
 `Title.es-MX.hi.srt`.
 
+It prints the `source:` it used. On builds where an API key has no user
+attached, `/Items` answers with an **empty set rather than an error**, so the
+helper retries through `/Users/<id>/Items` before concluding the library is
+empty — otherwise a working library would look like a failed scan.
+
 It reads an **existing** API key from `jellyfin.db` *inside the VM*, uses it
 there, and never prints it. If the DB has no key it exits 2 and prints the two
 GUI clicks instead of inventing credentials.
