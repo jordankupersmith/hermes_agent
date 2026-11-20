@@ -92,13 +92,15 @@ Details: manual **Step 10** (10a–10i).
 - [x] **Both titles imported (2026-11-20 10:33Z / later).** *The Breakfast Club*
       `hasFile True`, `downloadFolderImported 10:33Z`, Jellyfin sees it as 97 min;
       *Ferris Bueller's Day Off* at 100% and importing. Verdict **YES**.
-- [ ] **Flip Radarr's hardlink policy, then reclaim the duplicate copies.**
-      `/data` went 41 G -> 61 G for 14.8 GiB of titles: the imports COPIED
-      (`copyUsingHardlinks` off), so each title is on disk twice. Run
-      `sudo bash library_status.sh "<title>" --fix-hardlinks`, then remove the
-      two completed torrents (`qbt_admin.sh --remove-torrent "<title>" --yes`)
-      to return ~14.8 GiB. After the flip, every future import costs its size
-      once.
+- [ ] **Reclaim the pre-remux copies (do this — it is the last step of the flow).**
+      `copyUsingHardlinks` was **already True**; the 41 G -> 61 G jump is the
+      fix-59 remux replacing the library inode (its own log shows `remux:`/`done:`
+      for both titles), so each title legitimately exists twice until its torrent
+      is removed. Remove both completed torrents to return ~14.8 GiB, then
+      `--status` should read ~46 G used / 43 G free:
+      `qbt_admin.sh --remove-torrent "breakfast club" --yes` and the same for
+      `ferris`. Worth a sentence in the report: the hardlink is what keeps the
+      *remux peak* at 2 copies instead of 3.
 - [ ] **Confirm the normalizer handled both new titles.** The library file is
       still exactly the torrent's size (6.68 GiB) and its mtime is 11 min after
       the import, which is consistent with a remux that had nothing to drop (a

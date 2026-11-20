@@ -1525,25 +1525,33 @@ was skipped — re-run apply, then `--first-run`.
 4. On completion Radarr shows **Imported** and the file exists under
    `/data/media/movies`.
 
-**A hardlink is a Radarr SETTING, not a property of the layout (fix 76).** The
-same-ext4 layout only makes it possible; *Settings → Media Management → “Use
-Hardlinks instead of Copy”* (`copyUsingHardlinks`) decides. With it off every
-import is a second full copy, so `/data` grows by the title's size a second time
-and only returns when the torrent is removed. Measured 2026-11-20: two titles
-totalling 14.8 GiB took `/data` from 41 G to 61 G.
+**The hardlink is a Radarr SETTING, and it is on by default here (fix 76).**
+The same-ext4 layout only makes it possible; *Settings → Media Management → “Use
+Hardlinks instead of Copy”* (`copyUsingHardlinks`) decides, and
+`library_status.sh` prints it in every run — do not assume, read it:
 
 ```bash
-sudo bash library_status.sh "any title"                # prints the policy
+sudo bash library_status.sh "any title"                   # prints the policy
 sudo bash library_status.sh "any title" --fix-hardlinks   # flip + prove it
 ```
 
-It changes **future** imports only and re-reads the value afterwards (a `202`
-proves nothing). Two consequences worth knowing:
+**Do not read a doubled `/data` as a copy import.** After an import, the fix-59
+normalizer writes a new file and renames it over the library path, so the library
+inode is replaced and the torrent's copy becomes a second, independent one. That
+is expected: 2026-11-20, two titles totalling 14.8 GiB took `/data` 41 G -> 61 G
+*with* `copyUsingHardlinks=True`, because both had already been remuxed. The
+inode is the evidence, not the gigabyte count:
 
-- a title imported **before** the flip stays a copy; remove its torrent to get
-  the space back;
-- a title imported **after** it shares one extent, so `--remove-torrent` returns
-  ~nothing — the library holds the inode.
+- import **not yet remuxed** → library file and torrent file share one inode,
+  `links 2`, and `--remove-torrent` returns ~nothing;
+- import **already remuxed** (`remux:`/`done:` in `/var/log/media-normalize.log`)
+  → two inodes, `links 1`, and removing the torrent returns its full size.
+
+So the space comes back when you remove the completed torrent — that is the
+normal end of the flow, not a misconfiguration. What the hardlink buys you is the
+**peak**: during the remux it is 2 copies (original shared + new output) instead
+of 3 (original + imported copy + new output), which is the difference between
+finishing and `skip(space)` on a small disk.
 
 To answer “is *this* file normalized, and is it a hardlink?”:
 

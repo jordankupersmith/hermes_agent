@@ -25,8 +25,8 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | qBt `--status` on-disk line (fix 74) | mis-pointed at the retired path for one run: it printed `ABSENT` while printing `=true` from the real file. Fixed — one reader (`qbc_key`), and `UNKNOWN` when it cannot look |
 | *The Breakfast Club* (radarrId 3) | **IMPORTED 10:33Z** — `hasFile True`, 6.68 GiB, Jellyfin sees it as 97 min, verdict YES. The torrent is still seeding and holds a **second copy** (see hardlink row) |
 | *Ferris Bueller's Day Off* (radarrId 2) | 100% and importing; `/data/torrents/movies` (category path) |
-| Hardlink policy (fix 76) | **`copyUsingHardlinks` was OFF**, so both imports copied: `/data` 41 G -> 61 G for 14.8 GiB of titles. `library_status.sh "<title>" --fix-hardlinks` flips it (re-read as proof); removing the two torrents returns ~14.8 GiB |
-| Normalizer | the two new library files are still at torrent size (6.68 / 8.11 GiB) with **no log entry** — the un-normalized shape. `check_normalize.sh` (new: newest file, inode/link count) must show `audio 1 subs 0` + `done:` per title |
+| Hardlink policy (fix 76) | **`copyUsingHardlinks=True` — my first diagnosis was wrong.** The 41 G -> 61 G jump is the fix-59 remux replacing the library inode (`remux:`/`done:` in the log for both titles), so each title exists twice until its torrent is removed. Removing both returns ~14.8 GiB; the hardlink is what keeps the remux peak at 2 copies instead of 3 |
+| Normalizer | **both titles done** — BC `audio_tracks:1->1 subs:2->0` `dur:5817s->5817s`; Ferris `audio_tracks:2->1 subs:2->0` `dur:6180s->6180s`; verify shows `audio 1 / subs 0 / video 1` |
 
 ## Next commands (2026-11-20, in order)
 
