@@ -89,6 +89,23 @@ Details: manual **Step 10** (10a–10i).
       interface exists in the netns, or drop it and rely on the netns alone
       (which is the actual boundary). Do not remove it while the client is mid
       download.
+- [x] **Both titles imported (2026-11-20 10:33Z / later).** *The Breakfast Club*
+      `hasFile True`, `downloadFolderImported 10:33Z`, Jellyfin sees it as 97 min;
+      *Ferris Bueller's Day Off* at 100% and importing. Verdict **YES**.
+- [ ] **Flip Radarr's hardlink policy, then reclaim the duplicate copies.**
+      `/data` went 41 G -> 61 G for 14.8 GiB of titles: the imports COPIED
+      (`copyUsingHardlinks` off), so each title is on disk twice. Run
+      `sudo bash library_status.sh "<title>" --fix-hardlinks`, then remove the
+      two completed torrents (`qbt_admin.sh --remove-torrent "<title>" --yes`)
+      to return ~14.8 GiB. After the flip, every future import costs its size
+      once.
+- [ ] **Confirm the normalizer handled both new titles.** The library files are
+      still ~the torrent size (6.68 / 8.11 GiB), which is the *un-normalized*
+      shape, and the log has no entry for either. `sudo bash
+      check_normalize.sh` (now: newest file by default, with inode/link count)
+      must show `audio 1 subs 0` and a `done:` line per title. If it never runs,
+      the household audio/subtitle policy is not applied and the `.path` trigger
+      needs looking at.
 - [ ] **Let both titles finish, then prove the hardlink (2026-11-20 11:3xZ).**
       The stall diagnosis came back clean: `connection_status=connected`,
       ~1.3 MiB/s combined, 27 seeds, DHT 226 — the earlier `stalledDL` was swarm

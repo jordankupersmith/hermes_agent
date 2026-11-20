@@ -2019,6 +2019,56 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G29 complete: fix 75 present"
 
 # ======================================================================
+section "G30 — 2026-11-20 fix 76 (hardlink policy is a Radarr setting)"
+# A same-filesystem layout only makes hardlinks POSSIBLE. Radarr's Media
+# Management switch decides, and with it off every import is a second full copy.
+# Measured: /data 41 G -> 61 G for two titles totalling 14.8 GiB = exactly one
+# extra copy of each. The fix must (a) report the setting, (b) offer a supported
+# way to flip it, and (c) RE-READ it, because a 202 is not evidence.
+CHK_OK=1
+# Exact anchors: a file-wide grep for the flag/field name stays green with the
+# action or the print statement deleted (mutations M1/M2 caught that).
+if grep -Fq 'if [ "${2:-}" = "--fix-hardlinks" ]; then' "$LSTAT" \
+   && grep -Fq 'print("  copyUsingHardlinks  : %s" % hl)' "$LSTAT"; then
+    pass "library_status.sh reports the hardlink policy and offers --fix-hardlinks (fix 76)"
+else
+    fail "nothing surfaces copyUsingHardlinks — doubling disk stays invisible"
+    CHK_OK=0
+fi
+if grep -Fq 'st, after = call("GET", "/api/v3/config/mediamanagement")' "$LSTAT" \
+   && grep -Fq 'MISMATCH — the field did not persist' "$LSTAT"; then
+    pass "--fix-hardlinks proves the value by re-reading it (fix 76)"
+else
+    fail "--fix-hardlinks trusts the PUT response (the fix-71/73 mistake)"
+    CHK_OK=0
+fi
+if grep -Fq 'costs its size TWICE' "$LSTAT"; then
+    pass "the diagnosis explains the disk cost of a copy import (fix 76)"
+else
+    fail "an operator cannot tell why 14.8 GiB of titles ate 29.6 GiB"
+    CHK_OK=0
+fi
+if [ -f "$SCRIPT_DIR/tests/test_rd_hardlinks.py" ] \
+   && grep -Fq 'drop_field' "$SCRIPT_DIR/tests/test_rd_hardlinks.py" \
+   && python3 "$SCRIPT_DIR/tests/test_rd_hardlinks.py" >/dev/null 2>&1; then
+    pass "offline suite covers flip / already-true / silently-dropped / rejected"
+else
+    fail "tests/test_rd_hardlinks.py missing or failing"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 76' "$MEMORY" && grep -Fq -- '--fix-hardlinks' "$MANUAL"; then
+        pass "PROJECT_MEMORY records fix 76 and the manual names the command"
+    else
+        fail "the hardlink policy is not actionable from the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix 76 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G30 complete: fix 76 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

@@ -23,8 +23,10 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Transfer / VPN | **`connection_status=connected`**, ~1.3 MiB/s combined, 27 seeds, DHT 226 — the port-forward is fine and the now-live `Session\Interface=tun0` pin is not stalling anything (that had to be proven, manual §3k) |
 | Credential repair | **done 2026-11-20 11:1xZ**: durability gate passed (`Password_PBKDF2 changed — durable before any restart`), post-restart login OK, `testall isValid=True`. The fallback also fired once (`the file credential was rejected — trying the next source` → `refreshed from the log source`), which is fix 73 working |
 | qBt `--status` on-disk line (fix 74) | mis-pointed at the retired path for one run: it printed `ABSENT` while printing `=true` from the real file. Fixed — one reader (`qbc_key`), and `UNKNOWN` when it cannot look |
-| *The Breakfast Club* (radarrId 3) | **86.6%, tracked again** — the credential repair let Radarr re-adopt it (`queue: downloading / downloading`), so Radarr imports it itself at 100%. It sits in `/data/torrents` (added before the path switch); imports still hardlink. `--import-downloads` is no longer needed and now refuses while a download is tracked (fix 75) |
-| *Ferris Bueller's Day Off* (radarrId 2) | **44.5%, 8.11 GiB, `cat=radarr`, `/data/torrents/movies`** — the category path switch working in the field. Tracked by Radarr; auto-imports at completion |
+| *The Breakfast Club* (radarrId 3) | **IMPORTED 10:33Z** — `hasFile True`, 6.68 GiB, Jellyfin sees it as 97 min, verdict YES. The torrent is still seeding and holds a **second copy** (see hardlink row) |
+| *Ferris Bueller's Day Off* (radarrId 2) | 100% and importing; `/data/torrents/movies` (category path) |
+| Hardlink policy (fix 76) | **`copyUsingHardlinks` was OFF**, so both imports copied: `/data` 41 G -> 61 G for 14.8 GiB of titles. `library_status.sh "<title>" --fix-hardlinks` flips it (re-read as proof); removing the two torrents returns ~14.8 GiB |
+| Normalizer | the two new library files are still at torrent size (6.68 / 8.11 GiB) with **no log entry** — the un-normalized shape. `check_normalize.sh` (new: newest file, inode/link count) must show `audio 1 subs 0` + `done:` per title |
 
 ## Next commands (2026-11-20, in order)
 

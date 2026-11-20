@@ -1525,6 +1525,38 @@ was skipped — re-run apply, then `--first-run`.
 4. On completion Radarr shows **Imported** and the file exists under
    `/data/media/movies`.
 
+**A hardlink is a Radarr SETTING, not a property of the layout (fix 76).** The
+same-ext4 layout only makes it possible; *Settings → Media Management → “Use
+Hardlinks instead of Copy”* (`copyUsingHardlinks`) decides. With it off every
+import is a second full copy, so `/data` grows by the title's size a second time
+and only returns when the torrent is removed. Measured 2026-11-20: two titles
+totalling 14.8 GiB took `/data` from 41 G to 61 G.
+
+```bash
+sudo bash library_status.sh "any title"                # prints the policy
+sudo bash library_status.sh "any title" --fix-hardlinks   # flip + prove it
+```
+
+It changes **future** imports only and re-reads the value afterwards (a `202`
+proves nothing). Two consequences worth knowing:
+
+- a title imported **before** the flip stays a copy; remove its torrent to get
+  the space back;
+- a title imported **after** it shares one extent, so `--remove-torrent` returns
+  ~nothing — the library holds the inode.
+
+To answer “is *this* file normalized, and is it a hardlink?”:
+
+```bash
+sudo bash check_normalize.sh                       # newest library file
+sudo bash check_normalize.sh "/data/media/movies/X (2024)/X (2024) ....mkv"
+```
+
+It prints the stream counts (target `audio 1 / subs 0`), the log tail, the
+in-file temp of a running remux, and inode + link count + any `/data/torrents`
+file sharing that inode. Note that a fix-59 remux replaces the library inode, so
+`n=1` there is the expected end state, not a failed import.
+
 **If Radarr's queue row disappears while the torrent keeps going, the torrent is
 an orphan** — Radarr drops a tracked download when its download client is
 unreachable ("download was not found in the client"), and nobody imports it

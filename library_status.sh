@@ -316,6 +316,29 @@ else:
 PY
 
 # ---- 3b. Radarr -> download client: why is a queued grab stuck? -----------
+echo "== Radarr media management (does an import hardlink, or copy?) =="
+# fix 76 — the layout only makes hardlinks POSSIBLE (same ext4, same absolute
+# paths inside every container); Radarr's own Media Management switch decides
+# whether it uses one. With it off, every import is a second full copy that
+# stays until the torrent is removed. Measured 2026-11-20: /data went 41 G -> 61 G
+# for two titles totalling 14.8 GiB, i.e. exactly one extra copy of each.
+rd /api/v3/config/mediamanagement | python3 -c '
+import json,sys
+try: c=json.load(sys.stdin)
+except Exception: print("  (unparseable)"); raise SystemExit
+hl=c.get("copyUsingHardlinks")
+print("  copyUsingHardlinks  : %s" % hl)
+print("  importExtraFiles    : %s" % c.get("importExtraFiles"))
+print("  deleteEmptyFolders  : %s" % c.get("deleteEmptyFolders"))
+print("  recycleBin          : %s" % (c.get("recycleBinPath") or "(empty)"))
+if hl is True:
+    print("  -> imports hardlink: a title costs its size once, and removing the")
+    print("     torrent afterwards returns ~nothing (the library holds the inode)")
+else:
+    print("  -> imports COPY: every title costs its size TWICE until the torrent")
+    print("     is removed, and a full disk looks like a bug in the stack")
+    print("     fix: sudo bash library_status.sh \"<title>\" --fix-hardlinks")
+'
 echo "== Radarr -> download client =="
 rd /api/v3/downloadclient > "$TMP/clients.json" 2>/dev/null || echo '[]' > "$TMP/clients.json"
 python3 - "$TMP/clients.json" "$TMP/client_ids.txt" <<'PY'
@@ -532,7 +555,67 @@ if [ "${2:-}" = "--fix-qbt-auth" ]; then
     ACTION="--fix-qbt-auth"
 fi
 
-# opt-in write: clear the parked queue entry and ask Radarr to search again.
+# opt-in write (fix 76): make Radarr import with HARDLINKS instead of copying.
+# Deliberately a separate flag from any per-title action: it is a global policy,
+# it changes only FUTURE imports, and the existing library is untouched. The
+# whole config object is PUT back because Radarr validates the resource as a
+# whole; only one field differs, and the value is re-read afterwards to prove it
+# (a 202/200 response is not evidence — see fixes 71/73).
+if [ "${2:-}" = "--fix-hardlinks" ]; then
+    echo "== fix: Radarr imports with hardlinks (one copy, not two) =="
+    RDK="$RDK" python3 - "$RD" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+
+base, key = sys.argv[1].rstrip("/"), os.environ["RDK"]
+
+
+def call(method, path, payload=None):
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(
+        base + path, data=data, method=method,
+        headers={"X-Api-Key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return r.status, json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode() or "{}")
+        except Exception:
+            return e.code, {}
+
+
+st, cfg = call("GET", "/api/v3/config/mediamanagement")
+if st != 200:
+    print("  GET config/mediamanagement -> HTTP %s" % st)
+    raise SystemExit(4)
+before = cfg.get("copyUsingHardlinks")
+print("  before: copyUsingHardlinks = %s" % before)
+if before is True:
+    print("  nothing to do — imports already hardlink")
+    raise SystemExit(0)
+
+cfg["copyUsingHardlinks"] = True
+st, body = call("PUT", "/api/v3/config/mediamanagement", cfg)
+print("  PUT  config/mediamanagement -> HTTP %s" % st)
+if st not in (200, 202):
+    print("   ", json.dumps(body)[:400] if isinstance(body, (dict, list)) else body)
+    raise SystemExit(5)
+
+st, after = call("GET", "/api/v3/config/mediamanagement")
+got = after.get("copyUsingHardlinks") if st == 200 else None
+print("  after : copyUsingHardlinks = %s" % got)
+if got is not True:
+    print("  MISMATCH — the field did not persist; nothing else was changed")
+    raise SystemExit(3)
+print("  verify: OK — NEW imports hardlink into /data/media (existing files and")
+print("  the library are untouched; already-copied titles stay copies until you")
+print("  remove their torrents)")
+PY
+    RC=$?
+    [ "$RC" -eq 0 ] || { echo "  --fix-hardlinks failed (rc=$RC)"; exit "$RC"; }
+fi
+
+
 # Refuses unless every download client currently passes its own test, so it can
 # never paper over a broken client. Nothing is blocklisted (the release was
 # never downloaded, so there is no bad file to blame).
