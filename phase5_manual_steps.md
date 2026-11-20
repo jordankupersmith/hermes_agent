@@ -1379,7 +1379,12 @@ ban answers 403 *"Your IP address has been banned…"*, which Radarr shows as a
 plain `Authentication Failure` — and because Radarr retries on each queue
 refresh, its container IP stays banned while a host-side helper logs in fine.
 Clear it by restarting the container (`sudo bash library_status.sh "title"
---fix-qbt-auth`), then sync the credential and retry.
+--fix-qbt-auth`), then sync the credential and retry. **The restart alone does
+not turn `testall` green** when the credential was never saved (the earlier
+`PUT` answered 400 because the save is tested through the banned IP): expect
+`isValid=False` on that run and treat the **`202` from `--fix-client-password`**
+as the success signal, followed by `isValid=True` and then `--retry`'s
+`DELETE … 200` / `POST command … 201`.
 
 ### 10c. Categories and hardlink layout
 
@@ -2017,6 +2022,17 @@ cause in this deployment: with no explicit keys qBittorrent uses
 `ServerDomains=*` (any host) and `CSRFProtection` explicitly allows requests
 that carry no `Origin`/`Referer` (`isCrossSiteRequest`). Keep those settings
 alone.
+
+Verified live on 2026-11-20: the restart run still ended `isValid=False`, then
+`--fix-client-password` printed **`PUT … HTTP 202`** and `isValid=True`, then
+`--retry` printed `DELETE queue/… 200` and `POST command … 201`. Expect exactly
+that shape — a still-red testall after the restart is **not** a failed fix.
+
+**The verdict after an action says so (fix 68).** These flags work on the
+snapshot taken at the start of the run, so the final block reads
+`== VERDICT (snapshot taken before --retry) ==` and prints `ACTION TAKEN …,
+re-run the plain command` rather than `STUCK`. Run the plain command again
+about a minute later; that is the run that shows `NOT YET … downloading x%`.
 
 Secrets stay put: `RADARR_API_KEY` from `/opt/media-assistant/.env`, the qBt
 password from `QB_PASS`/the container log, the Jellyfin token from

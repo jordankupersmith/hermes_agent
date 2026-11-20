@@ -132,6 +132,33 @@ check("names the client status", "downloadClientUnavailable" in r.stdout)
 check("names the ban/password paths",
       "--fix-qbt-auth" in r.stdout and "--fix-client-password" in r.stdout)
 
+print("\n== verdict: right after a write flag ==")
+d = tempfile.mkdtemp()
+r = run(block("has_file = bool"),
+        [write_json(d, "m.json", [MOVIE]),
+         write_json(d, "q.json", QUEUE_STUCK),
+         write_json(d, "t.json", []),
+         write_json(d, "v.json", {"files": [], "items": []})],
+        {"TERM_IN": "breakfast club", "LS_ACTION": "--retry"})
+check("never prints STUCK from the pre-action snapshot",
+      "STUCK" not in r.stdout, r.stdout)
+check("says ACTION TAKEN", "ACTION TAKEN" in r.stdout)
+check("names the action", "--retry" in r.stdout)
+check("says to re-run", "re-run the plain" in r.stdout)
+
+print("\n== verdict: client now valid, row still parked ==")
+d = tempfile.mkdtemp()
+r = run(block("has_file = bool"),
+        [write_json(d, "m.json", [MOVIE]),
+         write_json(d, "q.json", QUEUE_STUCK),
+         write_json(d, "t.json", []),
+         write_json(d, "v.json", {"files": [], "items": []})],
+        {"TERM_IN": "breakfast club", "LS_CLIENTS_OK": "1"})
+check("still says STUCK", "STUCK" in r.stdout)
+check("does not repeat the password advice",
+      "--fix-client-password" not in r.stdout, r.stdout)
+check("points at --retry", "--retry" in r.stdout)
+
 print("\n== verdict: downloading ==")
 d = tempfile.mkdtemp()
 r = run(block("has_file = bool"),

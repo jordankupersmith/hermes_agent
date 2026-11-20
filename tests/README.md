@@ -17,7 +17,7 @@ python3 tests/test_library_status.py # library_status.sh — verdicts + fixes
 | `test_bz.py` | Bazarr 1.5.6's profiles API is read-only; the write goes through `POST /api/system/settings` as a form field carrying the **complete** profile list (a profile missing from it is deleted). `cutoff` is an item id. A second profile must survive. |
 | `test_jf.py` | The Jellyfin helper probes `192.168.122.10:8096` then loopback, exits 2/5/7 without tracebacks, and observes `Running -> Idle` on a scan. |
 | `test_rd.py` | Radarr's qBittorrent category field is `movieCategory`: an unknown `category` name is accepted (202) and silently dropped, so the read-back is what must decide success. |
-| `test_library_status.py` | Every verdict branch (YES / PARTLY / STUCK / downloading / NO / unknown title), the download-client host warning, password injection (without echoing it), and that `--retry` selects only parked rows. |
+| `test_library_status.py` | Every verdict branch (YES / PARTLY / STUCK / downloading / NO / unknown title), the download-client host warning, password injection (without echoing it), that `--retry` selects only parked rows, and that a run with a write flag reports `ACTION TAKEN` from the pre-action snapshot instead of repeating `STUCK` (fix 68). |
 
 `test_library_status.py` locates each embedded block by a **content marker**, not
 by position, so reordering the script does not break the suite.

@@ -42,6 +42,12 @@ TMP="$(mktemp -d)"
 JAR="$TMP/qb.cookies"
 trap 'rm -rf "$TMP"' EXIT
 
+# Set by the opt-in write flags. The verdict is computed from snapshots taken
+# at the START of the run, so after an action it must say "state before <flag>"
+# instead of repeating the pre-action verdict (observed live: a successful
+# --retry printed "STUCK" from the queue row it had just deleted).
+ACTION=""
+
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 RDK="$(grep -m1 '^RADARR_API_KEY=' "$ENVF" 2>/dev/null | cut -d= -f2-)"
@@ -298,6 +304,7 @@ PY
                 echo "  #$CID host is already 'gluetun' — not changing anything"
             fi
         done < "$TMP/client_ids.txt"
+        ACTION="--fix-client-host"
     fi
 fi
 
@@ -390,6 +397,7 @@ PY
             echo "  re-test after the change:"
             test_all "$CID"
         done < "$TMP/client_ids.txt"
+        ACTION="--fix-client-password"
     fi
     rm -f "$TMP/secret"
 fi
@@ -420,6 +428,7 @@ if [ "${2:-}" = "--fix-qbt-auth" ]; then
     echo "  saved-client test after the restart:"
     test_all
     echo "  if it is still invalid: --fix-client-password, then --retry"
+    ACTION="--fix-qbt-auth"
 fi
 
 # opt-in write: clear the parked queue entry and ask Radarr to search again.
@@ -466,6 +475,7 @@ PY
     echo "  POST command MoviesSearch movieIds=[$MID] -> HTTP $CODE (201 = queued)"
     echo "  re-run the plain command in a minute: the queue should move to a"
     echo "  real download client state and qBittorrent should list the torrent."
+    ACTION="--retry"
 fi
 
 # ---- 4. Inside media-vm: the file on disk + the Jellyfin library item -----
@@ -599,9 +609,24 @@ if not items:
 PY
 
 # ---- 5. verdict ------------------------------------------------------------
-echo "== VERDICT =="
-TERM_IN="$TERM_IN" python3 - "$TMP/movies.json" "$TMP/queue.json" "$TMP/torrents.json" "$TMP/vm.json" <<'PY'
+# The snapshots above are from the START of the run, so the verdict is told
+# (a) whether a write flag ran and (b) whether the download client tests valid
+# NOW. Without that, a successful --retry printed "STUCK" from the queue row it
+# had just deleted, and a repaired credential still told the operator to check
+# the password.
+CLIENTS_OK=0
+[ -s "$TMP/client_ids.txt" ] && CLIENTS_OK="$(clients_valid)"
+if [ -n "$ACTION" ]; then
+    echo "== VERDICT (snapshot taken before $ACTION) =="
+else
+    echo "== VERDICT =="
+fi
+TERM_IN="$TERM_IN" LS_ACTION="$ACTION" LS_CLIENTS_OK="$CLIENTS_OK" \
+python3 - "$TMP/movies.json" "$TMP/queue.json" "$TMP/torrents.json" "$TMP/vm.json" <<'PY'
 import json, os, re, sys
+
+action = (os.environ.get("LS_ACTION") or "").strip()
+clients_ok = (os.environ.get("LS_CLIENTS_OK") or "0") == "1"
 
 def norm(s): return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 term = norm(os.environ["TERM_IN"])
@@ -660,17 +685,29 @@ elif qq:
     stuck = (x.get("status") == "downloadClientUnavailable"
              or bool(x.get("errorMessage")) or not qt)
     if stuck:
-        print("  STUCK — Radarr queued %s but it never reached a working" % title)
-        print("  download client (%s, %.1f%%, no matching qBittorrent torrent)."
-              % (x.get("status"), pct))
-        if x.get("errorMessage"):
-            print("  Radarr says: %s" % x.get("errorMessage"))
-        print("  Read the diagnosis above: the download-client host/port,")
-        print("  Radarr's own testall verdict, and qBittorrent's login-failure")
-        print("  lines. A source IP banned after repeated failures answers 403")
-        print("  and Radarr reports it as 'Authentication Failure' — restart")
-        print("  qBt with --fix-qbt-auth; a real mismatch needs")
-        print("  --fix-client-password. Either way finish with --retry.")
+        if action:
+            print("  ACTION TAKEN — %s ran after this snapshot, so the queue" % action)
+            print("  row below is the OLD state (%s, %.1f%%, no matching torrent)."
+                  % (x.get("status"), pct))
+            print("  Radarr re-checks its queue within a minute: re-run the plain")
+            print("  command and look for 'NOT YET … downloading'.")
+        else:
+            print("  STUCK — Radarr queued %s but it never reached a working" % title)
+            print("  download client (%s, %.1f%%, no matching qBittorrent torrent)."
+                  % (x.get("status"), pct))
+            if x.get("errorMessage"):
+                print("  Radarr says: %s" % x.get("errorMessage"))
+            if clients_ok:
+                print("  The download client tests VALID now, so nothing needs")
+                print("  reconfiguring: this row is the old failed grab. Run")
+                print("  --retry to drop it and search again.")
+            else:
+                print("  Read the diagnosis above: the download-client host/port,")
+                print("  Radarr's own testall verdict, and qBittorrent's login-failure")
+                print("  lines. A source IP banned after repeated failures answers 403")
+                print("  and Radarr reports it as 'Authentication Failure' — restart")
+                print("  qBt with --fix-qbt-auth; a real mismatch needs")
+                print("  --fix-client-password. Either way finish with --retry.")
     else:
         print("  NOT YET — Radarr is still working on %s: %s / %s, %.1f%%, eta %s"
               % (title, x.get("status"), x.get("trackedDownloadState") or "-",
@@ -682,7 +719,12 @@ elif qt:
     print("  entry for it. That usually means a category/import mismatch;")
     print("  check Radarr Activity and the qBt category (TODO 10c).")
 else:
-    print("  NO — Radarr has metadata for %s but no file and no active" % title)
-    print("  download. Look at Radarr Activity/History for a failed grab,")
-    print("  then trigger a search from the Radarr UI or via Jellyseerr.")
+    if action:
+        print("  ACTION TAKEN — %s ran after this snapshot; Radarr has no" % action)
+        print("  queue entry for %s yet. Re-run in a minute: an indexer" % title)
+        print("  search can take that long to hand a release to the client.")
+    else:
+        print("  NO — Radarr has metadata for %s but no file and no active" % title)
+        print("  download. Look at Radarr Activity/History for a failed grab,")
+        print("  then trigger a search from the Radarr UI or via Jellyseerr.")
 PY
