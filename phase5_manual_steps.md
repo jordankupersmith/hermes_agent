@@ -1802,6 +1802,37 @@ sometimes give you Castilian. Bazarr can target the `Spanish (Latin America)`
 provider result explicitly, and Jellyfin serves an external `.srt` instantly
 (no demux pass over a 40 GB file).
 
+**So "the film has no subtitles" is two different questions (fix 77).** After a
+remux, `ffprobe` correctly reports **0 subtitle streams** — that is the policy,
+not a fault; the releases usually arrive with two (`subs:2->0` in the log). What
+matters is whether Bazarr put the external file beside it. One command answers
+both, per title:
+
+```bash
+sudo bash bazarr_status.sh "ferris"      # a title term, not a hardcoded film
+sudo bash bazarr_status.sh               # every movie Bazarr knows
+```
+
+The block to read is:
+
+```
+  profileId  : NONE  <-- Bazarr will NEVER search this movie
+  on disk    : 0 .srt  <-- the mkv carries none (fix 59) ...
+  verdict    : MISSING
+```
+
+`profileId: NONE` is the silent cause: with no language profile Bazarr computes
+`missing_subtitles` as **empty**, so there is nothing "missing" to search for and
+no error appears anywhere. Assign + search for one title with:
+
+```bash
+sudo bash bazarr_status.sh --assign "ferris"    # profile + search-missing
+sudo bash bazarr_status.sh "ferris"             # expect a .srt and verdict present
+```
+
+A `verdict: es-LA subtitle present` line means the family gets LatAm Spanish from
+the sidecar even though the container carries zero subtitle streams.
+
 **How it runs.** Two units inside `media-vm`, both installed and enabled by
 apply:
 

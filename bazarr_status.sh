@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 #
 # Why is there no es-LA .srt next to the film? Read-only.
-# Asks Bazarr itself (API + log). Never echoes the API key or any secret value.
+# Asks Bazarr itself (API + log) AND the disk. Never echoes the API key.
 #
-# Run as root on clawbox:   sudo bash bazarr_status.sh
-#                            sudo bash bazarr_status.sh --assign [radarrId]
-#                            sudo bash bazarr_status.sh --search [radarrId]
-#                            sudo bash bazarr_status.sh --upgrade   (run the
-#                              "Upgrade Previously Downloaded Subtitles" task)
+#   sudo bash bazarr_status.sh                    # every movie in Bazarr
+#   sudo bash bazarr_status.sh "ferris"           # one title (substring)
+#   sudo bash bazarr_status.sh --assign <radarrId|title>
+#   sudo bash bazarr_status.sh --search <radarrId|title>
+#   sudo bash bazarr_status.sh --upgrade          (# "Upgrade Previously
+#                                                  Downloaded Subtitles" task)
+#
+# fix 77 — this script used to filter on the literal string "hail mary" in the
+# Bazarr list, the Radarr list and the log, so with three films in the library it
+# could only ever report on one of them: the two newest had no subtitle check at
+# all. The household policy (fix 59) drops embedded subtitle tracks on purpose
+# and relies on Bazarr for an external es-LA .srt, so "the mkv has 0 subtitle
+# streams" is expected while "there is no .srt beside it" is a real gap.
 
 set -uo pipefail
 
@@ -21,12 +29,46 @@ BASE="http://192.168.122.10:6767"
 K=(-i /etc/media-vm/deploy_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/media-vm/known_hosts)
 VM=jordan@192.168.122.10
 
+# A title term (any non-flag first argument) narrows every list below.
+TERM=""
+case "${1:-}" in
+    --assign|--search|--upgrade) : ;;
+    "") : ;;
+    *) TERM="$1" ;;
+esac
+
 if [ -z "${KEY:-}" ]; then
     echo "no BAZARR_API_KEY in /opt/media-assistant/.env — re-run phase5_apply.sh first" >&2
     exit 1
 fi
 
 api() { curl -s -m 10 -H "X-API-KEY: $KEY" "$BASE$1"; }
+
+# The ground truth for "does the family get subtitles": the sidecar files on
+# disk. Bazarr's own view can say "have" for a file it did not write here (a
+# moved path, a stale DB row), and the mkv itself never carries one (fix 59).
+SRT_LIST="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+    "sudo find /data/media/movies -maxdepth 3 -type f -name '*.srt' -printf '%p\n' 2>/dev/null | head -200" \
+    2>/dev/null)"
+
+# resolve <radarrId|title> -> radarrId, using Bazarr's own movie list.
+resolve_rid() {
+    local a="${1:-}"
+    case "$a" in
+        ''|*[!0-9]*) : ;;
+        *) printf '%s' "$a"; return 0 ;;
+    esac
+    api /api/movies | A="$a" python3 -c '
+import json,os,re,sys
+d=json.load(sys.stdin); d=d.get("data",[]) if isinstance(d,dict) else d
+def norm(s): return re.sub(r"[^a-z0-9]+","",str(s).lower())
+a=norm(os.environ["A"])
+for m in d:
+    if a and a in norm(m.get("title")):
+        print(m.get("radarrId")); break
+' 2>/dev/null
+}
+
 
 echo "== enabled languages (the list that unlocks Add New Profile) =="
 api /api/system/languages | python3 -c '
@@ -66,45 +108,109 @@ for p in d:
     print("  %-24s status=%-18s retry=%s" % (p.get("name"), p.get("status"), p.get("retry")))
 ' 2>/dev/null
 
-echo "== the movie, as Bazarr sees it =="
-api /api/movies | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: print("  (unparseable response)"); raise SystemExit
-if isinstance(d, dict): d=d.get("data") or []
+echo "== the movie(s), as Bazarr sees it =="
+# fix 77 — filtered by TERM, not by a hardcoded title, and joined against the
+# .srt files actually on disk. `profileId: None` is the silent killer: with no
+# language profile Bazarr computes missing_subtitles as [] and never searches,
+# so the movie simply sits there with nothing to download and no error.
+api /api/movies | TERM="$TERM" SRT_LIST="$SRT_LIST" python3 -c '
+import json, os, re, sys
+
+def norm(s):
+    return re.sub(r"[^a-z0-9]+", "", str(s).lower())
+
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("  (unparseable response)"); raise SystemExit
+d = d.get("data", []) if isinstance(d, dict) else d
 if not d:
     print("  Bazarr has NO movies — the Radarr connection is not synced"); raise SystemExit
-hit=[m for m in d if "hail mary" in str(m.get("title","")).lower()]
-if not hit:
-    print("  %d movies in Bazarr but not this one:" % len(d))
-    for m in d[:10]: print("    -", m.get("title"))
-    raise SystemExit
-for m in hit:
-    print("  title      :", m.get("title"))
-    print("  radarrId   :", m.get("radarrId"))
-    print("  profileId  :", m.get("profileId"))
-    print("  monitored  :", m.get("monitored"))
-    print("  path       :", m.get("path"))
-    print("  missing    :", m.get("missing_subtitles"))
-    print("  have       :", [(s.get("name"), s.get("path")) for s in (m.get("subtitles") or [])])
+
+term = norm(os.environ.get("TERM") or "")
+srts = [p for p in (os.environ.get("SRT_LIST") or "").splitlines() if p]
+shown = 0
+for m in d:
+    title = m.get("title") or ""
+    if term and term not in norm(title):
+        continue
+    shown += 1
+    path = (m.get("path") or "").rstrip("/")
+    mine = [p for p in srts if path and p.startswith(path + "/")]
+    prof = m.get("profileId")
+    print()
+    print("  title      : %s" % title)
+    print("  radarrId   : %s   monitored=%s" % (m.get("radarrId"), m.get("monitored")))
+    if prof in (None, 0, ""):
+        print("  profileId  : NONE  <-- Bazarr will NEVER search this movie")
+        print("               (no language profile => missing_subtitles is empty)")
+    else:
+        print("  profileId  : %s" % prof)
+    print("  missing    : %s" % (m.get("missing_subtitles") or []))
     for f in (m.get("files") or []):
-        print("  file       :", f.get("path"), "| subtitles:", f.get("subtitles"))
+        print("  bazarr file: %s" % f.get("path"))
+        print("  bazarr subs: %s" % (f.get("subtitles") or []))
+    if mine:
+        print("  on disk    : %d .srt" % len(mine))
+        for p in mine:
+            print("               %s" % os.path.basename(p))
+        hi = [p for p in mine if re.search(r"\.hi\.srt$", p, re.I)]
+        if hi:
+            print("  verdict    : es-LA subtitle present (%s)" % os.path.basename(hi[0]))
+        else:
+            print("  verdict    : subtitle present, but no .hi. variant")
+    else:
+        print("  on disk    : 0 .srt  <-- the mkv carries none (fix 59), so this")
+        print("               title currently has NO subtitles at all")
+        print("  verdict    : MISSING")
+if not shown:
+    print("  no movie matches %r. Bazarr sees %d:" % (os.environ.get("TERM"), len(d)))
+    for m in d:
+        print("    - %s (radarrId=%s, profileId=%s)" % (
+            m.get("title"), m.get("radarrId"), m.get("profileId")))
 ' 2>/dev/null
+
+# A title term with nothing in Bazarr is usually a sync gap, not a subtitle gap.
+echo "== Radarr's side (the film half) =="
+RDK="$(grep -m1 '^RADARR_API_KEY=' /opt/media-assistant/.env 2>/dev/null | cut -d= -f2-)"
+if [ -n "${RDK:-}" ]; then
+    curl -s -m 10 -H "X-Api-Key: $RDK" "http://192.168.122.10:7878/api/v3/movie" 2>/dev/null \
+      | TERM="$TERM" python3 -c '
+import json, os, re, sys
+
+def norm(s):
+    return re.sub(r"[^a-z0-9]+", "", str(s).lower())
+
+term = norm(os.environ.get("TERM") or "")
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("  (unparseable response)"); raise SystemExit
+for m in d:
+    if term and term not in norm(m.get("title")):
+        continue
+    print("  %s (%s) radarrId=%s hasFile=%s" % (
+        m.get("title"), m.get("year"), m.get("id"), m.get("hasFile")))
+    print("    path: %s" % m.get("path"))
+' 2>/dev/null
+fi
 
 # opt-in: assign the (first) language profile to one movie, then search.
 # Uses the documented API: POST /api/movies?radarrid=&profileid= (which also
 # recomputes missing_subtitles) then PATCH ...&action=search-missing.
 first_radarrid() {
-    api /api/movies | python3 -c '
-import json,sys
-d=json.load(sys.stdin)
-d=d.get("data",[]) if isinstance(d,dict) else d
-ids=[m.get("radarrId") for m in d if m.get("radarrId")]
+    api /api/movies | TERM="$TERM" python3 -c '
+import json,os,re,sys
+d=json.load(sys.stdin); d=d.get("data",[]) if isinstance(d,dict) else d
+def norm(s): return re.sub(r"[^a-z0-9]+","",str(s).lower())
+t=norm(os.environ.get("TERM") or "")
+ids=[m.get("radarrId") for m in d
+     if m.get("radarrId") and (not t or t in norm(m.get("title")))]
 print(ids[0] if len(ids)==1 else "")' 2>/dev/null
 }
 
 if [ "${1:-}" = "--assign" ]; then
-    RID="${2:-}"
+    RID="$(resolve_rid "${2:-}")"
     if [ -z "$RID" ]; then
         RID="$(first_radarrid)"
         if [ -z "$RID" ]; then
@@ -133,7 +239,8 @@ fi
 
 # opt-in action: force a search for one movie (writes nothing but the .srt)
 if [ "${1:-}" = "--search" ]; then
-    SID="${2:-$(first_radarrid)}"
+    SID="$(resolve_rid "${2:-}")"
+    [ -n "$SID" ] || SID="$(first_radarrid)"
     echo "== forcing search-missing for radarrId ${SID:-?} =="
     CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 60 -X PATCH \
         -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$SID&action=search-missing")"
@@ -185,23 +292,7 @@ for j in rows:
 ' 2>/dev/null
 
 echo "== bazarr log: upgrade run + this title (entry lines only) =="
-ssh "${K[@]}" "$VM" 'sudo docker exec bazarr sh -c "grep -aiE \"upgrade|finished searching|hail mary|no subtitles found\" /config/log/bazarr.log 2>/dev/null | grep -aE \"^[0-9]{4}-[0-9]{2}-[0-9]{2}\" | tail -n 8 | cut -c1-300"' 2>/dev/null | sed 's/^/  /'
+ssh "${K[@]}" "$VM" 'sudo docker exec bazarr sh -c "grep -aiE \"upgrade|finished searching|no subtitles found|no subtitles to download\" /config/log/bazarr.log 2>/dev/null | grep -aE \"^[0-9]{4}-[0-9]{2}-[0-9]{2}\" | tail -n 8 | cut -c1-300"' 2>/dev/null | sed 's/^/  /'
 
 echo "== bazarr log: last 5 errors/warnings (entry lines only) =="
 ssh "${K[@]}" "$VM" 'sudo docker exec bazarr sh -c "grep -aE \"^[0-9]{4}-[0-9]{2}-[0-9]{2}.*\\|(ERROR|WARNING)\" /config/log/bazarr.log 2>/dev/null | tail -n 5 | cut -c1-240"' 2>/dev/null | sed 's/^/  /'
-
-echo "== what Radarr serves Bazarr (first movie entry) =="
-RDK="$(grep -m1 '^RADARR_API_KEY=' /opt/media-assistant/.env 2>/dev/null | cut -d= -f2-)"
-if [ -n "${RDK:-}" ]; then
-    curl -s -m 10 -H "X-Api-Key: $RDK" "http://192.168.122.10:7878/api/v3/movie" 2>/dev/null \
-      | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: print("  (unparseable response)"); raise SystemExit
-for m in d:
-    if "hail mary" in str(m.get("title","")).lower():
-        print("  %s (%s) | path=%s | hasFile=%s" % (m.get("title"), m.get("year"), m.get("path"), m.get("hasFile")))
-        for f in (m.get("movieFile") and [m["movieFile"]] or []):
-            print("  file:", f.get("relativePath"), "| size:", f.get("size"))
-' 2>/dev/null
-fi

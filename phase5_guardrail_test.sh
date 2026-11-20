@@ -2069,6 +2069,59 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G30 complete: fix 76 present"
 
 # ======================================================================
+section "G31 — 2026-11-20 fix 77 (the subtitle check must name every title)"
+# bazarr_status.sh filtered Bazarr's movie list, Radarr's movie list AND the log
+# on the literal string "hail mary". With three films in the library it could
+# only ever report on one, so the two newest had no subtitle coverage check at
+# all — and "0 embedded streams" (fix 59, by policy) looked identical to
+# "no subtitles at all" (a real gap).
+CHK_OK=1
+if grep -Fq 'TERM="$TERM" SRT_LIST="$SRT_LIST" python3 -c' "$SCRIPT_DIR/bazarr_status.sh" \
+   && ! grep -Fq 'if "hail mary" in' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "the movie listing is title-driven, not hardcoded (fix 77)"
+else
+    fail "bazarr_status.sh still filters on one film — the others go unchecked"
+    CHK_OK=0
+fi
+if grep -Fq 'Bazarr will NEVER search this movie' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "a missing language profile is called out as the silent cause (fix 77)"
+else
+    fail "profileId=None stays invisible — exactly the case that downloads nothing"
+    CHK_OK=0
+fi
+if grep -Fq "name '*.srt'" "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'verdict    : MISSING' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "the verdict comes from the .srt files on disk, not from Bazarr alone (fix 77)"
+else
+    fail "no ground-truth check on disk — a stale Bazarr row would look covered"
+    CHK_OK=0
+fi
+# The suite must KEEP the assertions the fix depends on: a green suite with the
+# MISSING/profile checks deleted proves nothing (mutation M5 did exactly that).
+if [ -f "$SCRIPT_DIR/tests/test_bz_status.py" ] \
+   && grep -Fq '"verdict    : MISSING" in r.stdout' "$SCRIPT_DIR/tests/test_bz_status.py" \
+   && grep -Fq 'Bazarr will NEVER search this movie' "$SCRIPT_DIR/tests/test_bz_status.py" \
+   && python3 "$SCRIPT_DIR/tests/test_bz_status.py" >/dev/null 2>&1; then
+    pass "offline suite covers every-film / term / no-match / normalised match"
+else
+    fail "tests/test_bz_status.py missing or failing"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 77' "$MEMORY" \
+       && grep -Fq 'bazarr_status.sh "ferris"' "$MANUAL" \
+       && grep -Fq 'Bazarr will NEVER search' "$MANUAL"; then
+        pass "PROJECT_MEMORY records fix 77 and the manual shows the per-title check"
+    else
+        fail "the two-questions distinction is not actionable from the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix 77 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G31 complete: fix 77 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="
