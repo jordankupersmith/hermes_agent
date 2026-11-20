@@ -2101,18 +2101,49 @@ recompute what Bazarr thinks is missing:
 
 ```bash
 sudo bash bazarr_status.sh --rescan "breakfast"
-#  PATCH action=scan-disk  -> re-reads the .srt files in that folder
-#  POST  profile <id>       -> recomputes missing_subtitles from the new rows
+#  PATCH action=sync      -> re-reads the movie from Radarr (audio_language)
+#  PATCH action=scan-disk -> re-reads the .srt files in that folder
+#  POST  profile <id>     -> recomputes missing_subtitles from the new rows
 ```
 
-Both steps are required. `scan-disk` rewrites the subtitle **rows** but leaves
-`missing_subtitles` alone, so after deleting a sidecar the movie can report
-`missing: none` with no file on disk, and `search-missing` then has nothing to
-do. Re-POSTing the same profile hits the API's `post` handler, which runs
-`list_missing_subtitles_movies(radarrid)`. The script also prints only the
+All three steps are required. `scan-disk` rewrites the subtitle **rows** but
+leaves `missing_subtitles` alone, so after deleting a sidecar the movie can
+report `missing: none` with no file on disk, and `search-missing` then has
+nothing to do. Re-POSTing the same profile hits the API's `post` handler, which
+runs `list_missing_subtitles_movies(radarrid)`. The script also prints only the
 record whose `radarrId` matches: `GET /api/movies` takes `radarrid[]` (an
 array), and a plain `?radarrid=N` is silently ignored — it returns **every**
 movie, so taking the first record shows another film's state (fix 84).
+
+**fix 85 — the audio language must come from the FILE, not from Radarr.** Bazarr
+copies `audio_language` from Radarr's `movieFile.languages`
+(`radarr/sync/parser.py`), and that field is the release's language set **at
+import time** — it keeps naming Spanish, French, German … after
+`media-normalize` has rewritten a MULTi remux down to one English track
+(observed on *Project Hail Mary*: `audioLanguages: 'eng'`, one `eng` audio
+stream on disk, but `languages: [English, Spanish, French, German, Italian,
+Hindi, Russian, Chinese]`). Every profile row is `audio_exclude=True`, so a
+stale Spanish entry makes
+`list_missing_subtitles_movies()` drop **all** Spanish rows: the movie reports
+`missing: none` with zero subtitle files, the search job completes in a tenth of
+a second, and nothing is downloaded and nothing is logged. Fix it once with:
+
+```bash
+sudo bash bazarr_status.sh --fix-audio-source
+#  before: parse_embedded_audio_track=False
+#  save -> HTTP 204 (1 field: settings-general-parse_embedded_audio_track)
+#  after : parse_embedded_audio_track=True
+#  verify: OK — audio languages now come from the file itself
+```
+
+That flips `general.parse_embedded_audio_track`, i.e. Bazarr probes the file's
+own **audio** streams instead of trusting Radarr's list. Changing it makes
+Bazarr run a full `update_movies()` inside the request, so `audio_language` is
+rewritten for the whole library and every `missing_subtitles` is recomputed;
+the command prints the resulting list per film. It refuses to flip the flag if
+`ffprobe`/`ffmpeg` is missing from the container (exit 7), because Bazarr would
+then be unable to read audio at all. Use `--rescan` afterwards only for a film
+whose list is still empty.
 
 It reads an **existing** API key from `jellyfin.db` *inside the VM*, uses it
 there, and never prints it. If the DB has no key it exits 2 and prints the two

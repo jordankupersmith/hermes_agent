@@ -123,12 +123,18 @@ Details: manual **Step 10** (10a–10i).
       when the token to its left is a real culture (`es`, not `es-MX`).
 - [x] **3-row profile applied** (`ea, es, es.hi`, cutoff on `es.hi`).
 - [x] **PHM's LatAm-HI file removed** (Jellyfin read it as Hindi).
-- [ ] **PHM is missing a subtitle and Bazarr says `missing: none` (fix 84).**
-      `scan-disk` rewrote its rows but not `missing_subtitles`, so
-      `search-missing` had nothing to fetch. `--rescan` now does both:
-      `sudo bash bazarr_status.sh --rescan 1` → expect `title: Project Hail
-      Mary`, `missing now: ea, es, es.hi`, `rows: []`. Then
-      `--search 1`, wait, and confirm `.es-MX.srt` + `.es.srt` land.
+- [x] **PHM recompute (fix 84)** — `--rescan` now syncs, scans and recomputes.
+- [ ] **Root cause found (fix 85): Bazarr trusted Radarr's import-time language list.**
+      Bazarr's `audio_language` came from `movieFile.languages`, which still
+      named Spanish/French/German/... after the normalizer left one English
+      track, and `audio_exclude=True` then dropped every Spanish row — so
+      `missing_subtitles` was `[]` and the search job exited in 0.13 s.
+      Run `sudo bash phase5_step1_install.sh` then
+      `sudo bash bazarr_status.sh --fix-audio-source` (one flat setting:
+      `settings-general-parse_embedded_audio_track=true`; Bazarr then ffprobes
+      the file's audio and rebuilds every movie's missing list). Expect PHM to
+      show `missing=ea, es, es.hi`; then `--search 1`, `--rescan 1`,
+      `jellyfin_admin.sh --scan`, `--subs`.
 - [ ] **`missing: es.hi` on Ferris/Breakfast is expected, not a fault.** The
       HI row is the last-resort row and the providers have no HI match for these
       releases; the non-HI rows (which the TV uses) are present. Bazarr will

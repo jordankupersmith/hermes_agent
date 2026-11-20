@@ -2350,6 +2350,64 @@ else
 fi
 [ "$CHK_OK" -eq 1 ] && pass "G35 complete: fix 83 present"
 
+section "G36 — 2026-11-20 fix 85 (Bazarr judged the audio from a frozen list)"
+# Radarr's movieFile.languages is the release's language set AT IMPORT TIME. A
+# MULTi remux keeps naming Spanish after media-normalize rewrote the file down
+# to one English track, and because every profile row is audio_exclude=True
+# Bazarr then drops every Spanish row: missing_subtitles stays [], the search
+# job exits 0, and no subtitle is ever fetched. The cure is
+# general.parse_embedded_audio_track (ffprobe the file's own audio), and
+# --rescan must re-read the movie before it reads the folder.
+CHK_OK=1
+if grep -Fq 'if [ "${1:-}" = "--fix-audio-source" ]; then' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'settings-general-parse_embedded_audio_track' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'the flag did not persist' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'command -v ffprobe' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "--fix-audio-source proves ffprobe exists, writes one flat field, reads it back"
+else
+    fail "fix 85: --fix-audio-source is missing or does not verify the write"
+    CHK_OK=0
+fi
+if python3 - "$SCRIPT_DIR/bazarr_status.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+start = src.index('if [ "${1:-}" = "--rescan" ]; then')
+end = src.index('if [ "${1:-}" = "--search" ]; then', start)
+b = src[start:end]
+# the exact URL of each call, so a comment naming the action cannot satisfy
+# this check (a mutated --rescan must fail it)
+i_sync = b.find('&action=sync"')
+i_scan = b.find('&action=scan-disk"')
+sys.exit(0 if 0 <= i_sync < i_scan else 1)
+PY
+then
+    pass "--rescan re-reads the movie from Radarr BEFORE it reads the folder"
+else
+    fail "fix 85: --rescan does not re-read the movie from Radarr (stale audio_language)"
+    CHK_OK=0
+fi
+if [ -f "$SCRIPT_DIR/tests/test_bz_audio.py" ] \
+   && grep -Fq 'no section blob is ever sent' "$SCRIPT_DIR/tests/test_bz_audio.py" \
+   && python3 "$SCRIPT_DIR/tests/test_bz_audio.py" >/dev/null 2>&1; then
+    pass "offline suite pins the flat field, the read-back, and the sync order"
+else
+    fail "fix 85: tests/test_bz_audio.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 85' "$MEMORY" \
+       && grep -Fq 'bazarr_status.sh --fix-audio-source' "$MANUAL" \
+       && grep -Fq 'parse_embedded_audio_track' "$MANUAL"; then
+        pass "PROJECT_MEMORY and the manual record why the audio must come from the file"
+    else
+        fail "fix 85 is not in PROJECT_MEMORY / the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail — fix 85 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G36 complete: fix 85 present"
+
 # ======================================================================
 echo
 echo "=============================================================="

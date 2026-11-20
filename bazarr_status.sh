@@ -12,6 +12,8 @@
 #   sudo bash bazarr_status.sh --search <radarrId|title>
 #   sudo bash bazarr_status.sh --upgrade          (# "Upgrade Previously
 #                                                  Downloaded Subtitles" task)
+#   sudo bash bazarr_status.sh --fix-audio-source  (# fix 85: read the audio
+#                                                  languages from the FILE)
 #
 # fix 80/81 — a movie synced from Radarr with no language profile has an empty
 # missing_subtitles, so Bazarr never searches it and never errors. Future syncs
@@ -41,7 +43,7 @@ VM=jordan@192.168.122.10
 # A title term (any non-flag first argument) narrows every list below.
 TERM=""
 case "${1:-}" in
-    --assign|--assign-all|--search|--upgrade|--default-profile|--rescan) : ;;
+    --assign|--assign-all|--search|--upgrade|--default-profile|--rescan|--fix-audio-source) : ;;
     "") : ;;
     *) TERM="$1" ;;
 esac
@@ -333,6 +335,103 @@ PY
     [ "$RC" -eq 0 ] || { echo "  --default-profile failed (rc=$RC)"; exit "$RC"; }
 fi
 
+# fix 85 — Bazarr must judge the AUDIO by the file, not by Radarr's list.
+# `radarr/sync/parser.py` does, on a non-legacy Radarr:
+#     if 'languages' in movie['movieFile']:
+#         for item in movie['movieFile']['languages']:
+#             audio_language.append(audio_language_from_name(item['name']))
+# That field is the language set of the release AT IMPORT TIME and includes
+# subtitle tracks. A MULTi remux therefore stores Spanish as an "audio"
+# language long after media-normalize (fix 59/78) rewrote the file down to one
+# English track. With audio_exclude=True on every profile row,
+# list_missing_subtitles_movies() then drops each Spanish row and reports
+# `missing: []` — search-missing runs, finds nothing to do, exits 0. Silent.
+# `general.parse_embedded_audio_track` switches the parser to
+# embedded_audio_reader(), i.e. ffprobe on the file's audio streams. Bazarr
+# also runs a full update_movies() when that flag changes (app/config.py), so
+# flipping it rewrites audio_language for the whole library in one go.
+if [ "${1:-}" = "--fix-audio-source" ]; then
+    echo "== fix 85: take the audio languages from the FILE, not from Radarr =="
+    FP="$(ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+        'sudo docker exec bazarr sh -c "command -v ffprobe || command -v ffmpeg"' \
+        2>/dev/null | tr -d '\r' | tail -n1)"
+    if [ -z "${FP:-}" ]; then
+        echo "  no ffprobe/ffmpeg inside the bazarr container — NOT switching" >&2
+        echo "  (Bazarr would then be unable to read any audio track at all)" >&2
+        exit 7
+    fi
+    echo "  ffprobe in the bazarr container: $FP"
+    BASE="$BASE" KEY="$KEY" python3 - <<'PY'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+base, key = os.environ["BASE"].rstrip("/"), os.environ["KEY"]
+
+
+def get(path, timeout=60):
+    req = urllib.request.Request(base + path, headers={"X-API-KEY": key})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def post(pairs, timeout=900):
+    body = urllib.parse.urlencode(pairs).encode()
+    req = urllib.request.Request(
+        base + "/api/system/settings", data=body, method="POST",
+        headers={"X-API-KEY": key,
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        print("  save rejected: HTTP %s" % e.code)
+        print("  body: %s" % e.read().decode("utf-8", "replace")[:300])
+        raise SystemExit(4)
+
+
+def truthy(v):
+    return str(v).strip().lower() in ("true", "1", "yes")
+
+
+cfg = get("/api/system/settings")
+if not isinstance(cfg, dict) or "general" not in cfg:
+    print("  unexpected /api/system/settings shape — refusing to POST it")
+    raise SystemExit(6)
+
+before = truthy((cfg.get("general") or {}).get("parse_embedded_audio_track"))
+print("  before: parse_embedded_audio_track=%s" % before)
+if before:
+    print("  nothing to do — Bazarr already probes the file's audio tracks")
+else:
+    # fix 81 — one flat field. save_settings() only applies
+    # settings-<section>-<key>; a section blob returns 204 and stores nothing.
+    fields = [("settings-general-parse_embedded_audio_track", "true")]
+    st = post(fields)
+    print("  save -> HTTP %s (1 field: %s)" % (st, fields[0][0]))
+    print("  (Bazarr runs a full movie resync inside this request — be patient)")
+
+after = truthy((get("/api/system/settings").get("general") or {})
+               .get("parse_embedded_audio_track"))
+print("  after : parse_embedded_audio_track=%s" % after)
+if not after:
+    print("  MISMATCH — the flag did not persist; audio_language is unchanged")
+    raise SystemExit(3)
+
+print("\n== what Bazarr now believes, per movie ==")
+for m in sorted(get("/api/movies").get("data", []), key=lambda x: x.get("radarrId") or 0):
+    miss = [(x.get("code2") or "?") + (".hi" if x.get("hi") else "")
+            for x in (m.get("missing_subtitles") or [])]
+    print("  radarrId=%-2s %-32s missing=%s" % (
+        m.get("radarrId"), (m.get("title") or "")[:32],
+        ", ".join(miss) if miss else "none"))
+print("\n  verify: OK — audio languages now come from the file itself")
+print("  next  : sudo bash bazarr_status.sh --rescan <radarrId>   (for a film")
+print("          whose missing list is still empty), then --search <radarrId>")
+PY
+    RC=$?
+    [ "$RC" -eq 0 ] || { echo "  --fix-audio-source failed (rc=$RC)"; exit "$RC"; }
+fi
+
+
 # fix 80 — assign the profile to every movie that has none, then search.
 # Idempotent: a movie that already has a profile is left alone.
 if [ "${1:-}" = "--assign-all" ]; then
@@ -428,6 +527,19 @@ for m in d:
         print(m.get("profileId") or "")
         break
 ' 2>/dev/null)"
+    # fix 85 — re-read the movie from Radarr BEFORE reading the folder.
+    # audio_language is copied from Radarr's `movieFile.languages`, a list
+    # Radarr freezes when the file is imported: a MULTi remux the normalizer
+    # later rewrote down to ONE English track still "carries" Spanish, French,
+    # German... Every profile row here is audio_exclude=True, so a stale
+    # Spanish entry drops ALL Spanish rows from the desired list and
+    # missing_subtitles stays [] forever — no error, no search, no subtitle.
+    # `action=sync` -> update_one_movie() -> movieParser() -> store_subtitles_movie()
+    # -> list_missing_subtitles_movies(), i.e. audio_language AND the missing
+    # list are both rebuilt from what the server knows right now.
+    C0="$(curl -s -o /dev/null -w '%{http_code}' -m 300 -X PATCH \
+        -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$SID&action=sync")"
+    echo "  PATCH sync       -> HTTP $C0 (204 = re-read the movie from Radarr)"
     C1="$(curl -s -o /dev/null -w '%{http_code}' -m 120 -X PATCH \
         -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$SID&action=scan-disk")"
     echo "  PATCH scan-disk  -> HTTP $C1 (204 = re-read the folder)"
