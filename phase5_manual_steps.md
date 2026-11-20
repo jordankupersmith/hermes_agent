@@ -1326,18 +1326,51 @@ search. Four preconditions, all inside Radarr/Jellyseerr:
 
 ### 10b. qBittorrent WebUI password
 
-Open `http://localhost:8080`, user `admin`, and try the temporary password:
+**Short answer: do not use the GUI, and do not use the temporary password.**
+Run this once per deployment, after Radarr's download client already works
+(10a):
 
 ```bash
-sudo docker logs qbittorrent 2>&1 | grep -i temporary     # inside media-vm
+sudo bash qbt_admin.sh --set-password
 ```
 
-If it logs in, you are still on the temp password → set a permanent one:
-*Settings (gear) → WebUI → Authentication* → username + password → **Save**.
-Store it: Radarr/Sonarr and Phase 6 both use it.
+It is one atomic operation, because the two halves are useless apart:
 
-If the temporary line is gone, reset the password — **stop the container first**
-(qBittorrent dumps its in-memory conf on SIGTERM; see §3j):
+| Step | What it does |
+| --- | --- |
+| 1 | logs in with the current credential **from the host** (a different source IP than Radarr, so a Radarr ban cannot block the repair) |
+| 2 | `POST /api/v2/app/setPreferences` → `web_ui_password` (plaintext over the VM-only port; qBittorrent hashes it with PBKDF2 itself) |
+| 3 | proves it with a **fresh login** — a live cookie would keep working even if the value were dropped |
+| 4 | stores it in `/etc/media-vm/qbt_webui_password` (**600 root:root**) *before* touching Radarr, so any later failure is recoverable |
+| 5 | `PUT`s it into Radarr's download client |
+| 6 | restarts qBittorrent (the login-ban list is in memory only) |
+| 7 | requires Radarr's own `testall` to print `isValid=True` |
+
+Read the value with `sudo cat /etc/media-vm/qbt_webui_password`; every helper
+reads it automatically (`$QB_PASS` first, then the file, then the log, then a
+prompt). Re-running is safe and idempotent — it reads the stored password and
+rewrites Radarr. `QB_NEW_PASS=...` supplies your own (minimum 12 characters),
+`--no-restart` skips step 6.
+
+**Why this replaces the temporary password (fix 71).** With no password
+configured, qBittorrent prints a **session-scoped** temporary password on every
+start, so any container recreate — including every `phase5_apply.sh` run —
+invalidates what Radarr stored. Radarr then retries the old value every ~60 s,
+bans its own source IP after 5 failures for `BanDuration` (3600 s), and reports
+the ban as a plain `Authentication Failure`. That is the whole incident class;
+one permanent credential removes it.
+
+Invariants while you are in that UI:
+
+- **Never change the listen port** — it stays `37686` (apply V4 asserts it; a
+  change breaks the AirVPN forward).
+- *Settings → Connection* → "Use UPnP / NAT-PMP" stays **off**.
+- Never change the password **in the UI** without Radarr: a half-done change
+  re-creates the ban within a minute. Use the command above.
+
+If the temporary line is gone and you have no password file (e.g. an older
+install), reset it — **stop the container first** (qBittorrent dumps its
+in-memory conf on SIGTERM; see §3j):
 
 ```bash
 sudo docker stop qbittorrent
@@ -1346,13 +1379,7 @@ sudo docker start qbittorrent
 sudo docker logs qbittorrent 2>&1 | grep -i temporary
 ```
 
-Three invariants while in that UI:
-
-- **Never change the listen port** — it stays `37686` (apply V4 asserts it; a
-  change breaks the AirVPN forward).
-- *Settings → Connection* → "Use UPnP / NAT-PMP" stays **off**.
-- Changing the WebUI password later means updating Radarr's/Sonarr's download
-  client entry too, or imports stop with 401.
+…then run `--set-password` so it never happens again.
 
 **Scripted fix when Radarr says `Authentication Failure` (2026-11-19).** Radarr
 keeps the qBt password in its download-client entry, so if qBt is still on the
@@ -1419,6 +1446,17 @@ The individual commands remain available (`--create-category`,
 preference live (no restart), verifies it by reading it back, and exits 2 if a
 category still has no `savePath`. All of it affects **new** adds only.
 
+**fix 70 — the durable copy is `qBittorrent.conf`, not the live value.**
+qBittorrent keeps settings in memory and writes them ~5 s after a change
+(`SettingsStorage`) plus once on a clean shutdown, so a live API write can be
+lost by a container recreate: observed 2026-11-20, `True` before `up -d`
+recreated qbittorrent and `False` after. `phase5_apply.sh` therefore writes
+`Session\UseCategoryPathsInManualMode=true` into the conf **while qBittorrent is
+stopped**, `phase5_diag.sh` S3 fails if the key is absent or `false`, and
+`qbt_admin.sh --status` prints both the live and the on-disk value. If it reads
+`False` after a rebuild, the apply step was skipped — re-run apply, then
+`--first-run`.
+
 ### 10d. End-to-end test + hardlink proof
 
 1. Request one small, popular, well-seeded movie in Jellyseerr.
@@ -1429,6 +1467,25 @@ category still has no `savePath`. All of it affects **new** adds only.
    filesystem).
 4. On completion Radarr shows **Imported** and the file exists under
    `/data/media/movies`.
+
+**If Radarr's queue row disappears while the torrent keeps going, the torrent is
+an orphan** — Radarr drops a tracked download when its download client is
+unreachable ("download was not found in the client"), and nobody imports it
+afterwards. Fix the credential (`qbt_admin.sh --set-password`), then when the
+torrent finishes:
+
+```bash
+sudo bash qbt_admin.sh --import-downloads "/data/torrents/<torrent folder>"
+```
+
+That queues Radarr's `DownloadedMoviesScan` on the folder and imports what it
+recognises (manual-import path — no queue row needed). Only `/data/torrents` is
+accepted. Radarr resolves the manual mode to **Move**, so with hardlinks on it
+hardlinks into the library and unlinks the torrent's copy: no data is
+duplicated, but the torrent then reports missing files and
+`--remove-torrent` will not return space (the library holds the inode). Do not
+run it while the torrent is still incomplete — Radarr would import a partial
+file.
 
 One command on the VM (jordan can read `/data`) groups duplicates by inode:
 

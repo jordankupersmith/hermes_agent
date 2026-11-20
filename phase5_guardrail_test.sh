@@ -1744,6 +1744,92 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G25 complete: fix 69 present"
 
 # ======================================================================
+section "G26 — 2026-11-20 fix 70/71 (qBt credential + category-path durability)"
+# Two failures one container recreate apart (both observed live 2026-11-20
+# after `up -d` recreated qbittorrent):
+#   * the WebUI password is TEMPORARY when none is configured, and qBittorrent
+#     generates a new one on every start — so Radarr held a dead credential,
+#     banned its own source IP (5 failures/3600 s) and reported the ban as
+#     "Authentication Failure";
+#   * Session\UseCategoryPathsInManualMode was True live and False after the
+#     recreate: settings live in memory and are written 5 s later, so a kill
+#     loses a live-only write. Only the conf is durable.
+# A rebuild must do both by itself: one atomic credential command, and the
+# path switch written into qBittorrent.conf while qBittorrent is stopped.
+CHK_OK=1
+
+if grep -Fq -- '--set-password)      cmd_set_password' "$QBT" \
+   && grep -Fq 'web_ui_password' "$QBT" \
+   && grep -Fq 'app/setPreferences' "$QBT"; then
+    pass "qbt_admin.sh has --set-password (setPreferences, plaintext hashed server-side)"
+else
+    fail "qbt_admin.sh lost --set-password — the temporary password rotates on every recreate"
+    CHK_OK=0
+fi
+if grep -Fq 'fresh login with the new password' "$QBT" \
+   && grep -Fq '"$TMP/pw.py" set' "$QBT"; then
+    pass "--set-password proves the new value with a FRESH login (a live cookie would lie)"
+else
+    fail "the password write is unverified — a session cookie keeps working even if the value was dropped"
+    CHK_OK=0
+fi
+if grep -Fq 'QBPWF=/etc/media-vm/qbt_webui_password' "$QBT" \
+   && grep -Fq 'install -m 600 -o root -g root' "$QBT" \
+   && grep -Fq 'qbt_webui_password' "$LSTAT"; then
+    pass "the credential is stored root-only (600) and library_status.sh reads it first"
+else
+    fail "the permanent credential is not stored/read consistently (helpers fall back to the stale log line)"
+    CHK_OK=0
+fi
+if grep -Fq '"$TMP/pw.py" radarr' "$QBT" \
+   && grep -Fq '"$TMP/pw.py" test' "$QBT" \
+   && grep -Fq 'docker restart qbittorrent' "$QBT"; then
+    pass "--set-password is atomic: Radarr updated, ban cleared, testall required"
+else
+    fail "--set-password no longer updates Radarr / clears the ban / requires testall — a half-change re-creates the ban"
+    CHK_OK=0
+fi
+if grep -Fq -- '--import-downloads)  cmd_import_downloads' "$QBT" \
+   && grep -Fq 'DownloadedMoviesScan' "$QBT"; then
+    pass "--import-downloads recovers a torrent Radarr dropped from its queue"
+else
+    fail "--import-downloads is missing — an orphaned torrent is never imported"
+    CHK_OK=0
+fi
+if grep -Fq 'Session\UseCategoryPathsInManualMode=true' "$APPLY"; then
+    pass "phase5_apply.sh writes Session\\UseCategoryPathsInManualMode=true into qBittorrent.conf (fix 70)"
+else
+    fail "apply does not persist the manual-mode path switch — a rebuild reproduces fix 69"
+    CHK_OK=0
+fi
+if grep -Fq 'UseCategoryPathsInManualMode=true' "$DIAG" \
+   && grep -Fq 'qbt_webui_password' "$DIAG"; then
+    pass "phase5_diag.sh asserts the path switch on disk and the 600 credential file"
+else
+    fail "diag does not check the durable path switch / credential mode — a regression would pass the gate"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq -- '--set-password' "$MANUAL" \
+       && grep -Fq 'FIX 70' "$MEMORY" \
+       && grep -Fq 'FIX 71' "$MEMORY"; then
+        pass "manual 10b documents --set-password and PROJECT_MEMORY records fixes 70/71"
+    else
+        fail "fixes 70/71 are not actionable from the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix 70/71 doc checks skipped"
+fi
+if [ -f "$SCRIPT_DIR/tests/test_qbt_pw.py" ]; then
+    pass "tests/test_qbt_pw.py covers set/verify/radarr/test/import"
+else
+    fail "tests/test_qbt_pw.py is missing — the credential plumbing is untested"
+    CHK_OK=0
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G26 complete: fixes 70/71 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

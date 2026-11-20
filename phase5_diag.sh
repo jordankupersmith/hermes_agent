@@ -263,6 +263,18 @@ if [ "$SSH_UP" -eq 1 ]; then
     else
         pass "no stale Session\\Port=6881 in qBittorrent.conf"
     fi
+    # fix 70 — the durable copy of the manual-mode path switch. Without it every
+    # Radarr/Sonarr add (category only, no savepath/autoTMM) lands in the
+    # session save path and the category's /data/torrents/<kind> is ignored.
+    QBCAT="$(vmrun "grep -F 'Session\UseCategoryPathsInManualMode=true' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    QBCAT_OFF="$(vmrun "grep -F 'Session\UseCategoryPathsInManualMode=false' /data/config/qbittorrent/qBittorrent.conf 2>/dev/null" 2>/dev/null)"
+    if [ -n "$QBCAT" ]; then
+        pass "qBittorrent.conf Session\\UseCategoryPathsInManualMode=true (fix 70)"
+    elif [ -n "$QBCAT_OFF" ]; then
+        fail "qBittorrent.conf sets UseCategoryPathsInManualMode=false — *arr adds ignore the category path (fix 70)"
+    else
+        fail "qBittorrent.conf has no UseCategoryPathsInManualMode key — *arr adds ignore the category path (fix 70)"
+    fi
     # fix 56 — the conf value is only real if the process LISTENS on it inside
     # gluetun's netns (that is the interface AirVPN forwards to). /proc/net/tcp
     # needs no tools: state 0A = LISTEN, listener remote = 00000000:0000, and the
@@ -656,6 +668,19 @@ else
 fi
 JP="$(stat -c '%U:%G %a' /home/jordan 2>/dev/null)"
 [ "$JP" = "jordan:jordan 750" ] && pass "/home/jordan 750 jordan:jordan" || fail "/home/jordan: $JP"
+# fix 71 — the permanent qBt WebUI credential (written by
+# `qbt_admin.sh --set-password`). Optional on a brand-new install, but if it
+# exists it must stay root-only: every helper reads it.
+QBPWF=/etc/media-vm/qbt_webui_password
+if [ -f "$QBPWF" ]; then
+    QP="$(stat -c '%U:%G %a' "$QBPWF" 2>/dev/null)"
+    case "$QP" in
+        "root:root 600") pass "$QBPWF root:root 600 (permanent qBt WebUI credential — fix 71)" ;;
+        *)               fail "$QBPWF is '$QP' — want 'root:root 600' (fix 71)" ;;
+    esac
+else
+    note "$QBPWF absent — qBittorrent still uses its first-run temporary password (qbt_admin.sh --set-password)"
+fi
 
 # -----------------------------------------------------------------------------
 # S10 — media-assistant .env harvest (masked)

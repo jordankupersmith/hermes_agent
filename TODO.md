@@ -46,6 +46,11 @@ Details: manual **Step 10** (10a–10i).
       `"syncLevel":"fullSync"`, and Radarr's indexer count becomes `1` (YTS).
 - [ ] **qBittorrent WebUI password** permanently set (10b), then the same
       credentials in Radarr's download client.
+      **Scripted (fix 71, 2026-11-20):** `sudo bash qbt_admin.sh --set-password`
+      — one atomic run (set + fresh-login proof + 600 root-only store + Radarr
+      PUT + ban-clearing restart + `testall`). Needed because qBittorrent's
+      temporary password is **regenerated on every container start**, so each
+      apply re-created the "Authentication Failure" incident.
 - [ ] **qBt category** `radarr` → `/data/torrents/movies` **and** the manual-mode
       path switch (10c).
       **Confirmed 2026-11-19:** the category exists but its `savePath` is
@@ -66,6 +71,12 @@ Details: manual **Step 10** (10a–10i).
       the torrent still landed in `/data/torrents`. Run
       `sudo bash qbt_admin.sh --fix-category-paths` (live, no restart) and
       confirm the next grab's `save_path`.
+      **fix 70:** the live value is not durable — a container recreate dropped
+      it to `False` (observed 2026-11-20). `phase5_apply.sh` now writes
+      `Session\UseCategoryPathsInManualMode=true` into `qBittorrent.conf` while
+      qBt is stopped, and `phase5_diag.sh` S3 fails if it is absent. Gate: after
+      an apply, `qbt_admin.sh --status` must show
+      `on disk : UseCategoryPathsInManualMode=true`.
 - [ ] **End-to-end request** + hardlink proof (`n=2`, same inode) (10d).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL

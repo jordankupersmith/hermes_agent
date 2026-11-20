@@ -22,8 +22,10 @@
 # plain-language verdict. Nothing is written, deleted or re-scanned.
 #
 # Secrets: RADARR_API_KEY is read from /opt/media-assistant/.env, the qBt
-# password from $QB_PASS or the first-run temporary password in the container
-# log, and the Jellyfin token from jellyfin.db *inside the VM*. None is printed.
+# password from $QB_PASS, else /etc/media-vm/qbt_webui_password (600 root:root,
+# written by qbt_admin.sh --set-password), else the first-run temporary
+# password in the container log, and the Jellyfin token from jellyfin.db
+# *inside the VM*. None is printed.
 
 set -uo pipefail
 
@@ -34,6 +36,10 @@ TERM_IN="${1:-}"
 RD="http://192.168.122.10:7878"
 QB="http://192.168.122.10:8080"
 ENVF=/opt/media-assistant/.env
+# fix 71 — permanent WebUI credential (600 root:root), written by
+# `qbt_admin.sh --set-password`. Read BEFORE the container log: once a permanent
+# password exists the log's "temporary password" line is stale.
+QBPWF=/etc/media-vm/qbt_webui_password
 K=(-i /etc/media-vm/deploy_ed25519 -o IdentitiesOnly=yes
    -o UserKnownHostsFile=/etc/media-vm/known_hosts)
 VM=jordan@192.168.122.10
@@ -106,16 +112,33 @@ qbt_temp_password() {
         2>/dev/null | sed -n 's/.*password[^:]*: *//p'
 }
 
+qb_pass() {
+    # stdout = the password, stderr = where it came from (never the value).
+    if [ -n "${QB_PASS:-}" ]; then
+        echo "  using \$QB_PASS" >&2; printf '%s' "$QB_PASS"; return 0
+    fi
+    if [ -r "$QBPWF" ]; then
+        local p; p="$(head -n1 "$QBPWF" 2>/dev/null)"
+        if [ -n "$p" ]; then
+            echo "  using the stored WebUI password ($QBPWF, 600 root-only)" >&2
+            printf '%s' "$p"; return 0
+        fi
+    fi
+    local t; t="$(qbt_temp_password)"
+    if [ -n "$t" ]; then
+        echo "  using the first-run temporary password from the container log" >&2
+        printf '%s' "$t"; return 0
+    fi
+    return 0
+}
+
 qb_login() {
     local v
     v="$(qb /api/v2/app/version 2>/dev/null)"
     case "$v" in v*) echo "  qBittorrent $v (session already authorised)"; return 0 ;; esac
-    local pass="${QB_PASS:-}"
-    if [ -z "$pass" ]; then
-        pass="$(qbt_temp_password)"
-        [ -n "$pass" ] && echo "  using the first-run temporary password from the container log"
-    fi
-    [ -n "$pass" ] || die "no qBittorrent password (set QB_PASS=...)"
+    local pass
+    pass="$(qb_pass)"
+    [ -n "$pass" ] || die "no qBittorrent password (set QB_PASS=..., or run qbt_admin.sh --set-password)"
     local r
     r="$(qb /api/v2/auth/login --data-urlencode 'username=admin' \
             --data-urlencode "password=$pass" --data 'referer=http://localhost:8080/')"
@@ -256,6 +279,9 @@ if not on:
     print("  with this OFF the category savePath is ignored: every add lands in")
     print("  %s. Hardlinks still work (same filesystem); fix the layout with" % base)
     print("  sudo bash qbt_admin.sh --fix-category-paths   (fix 69)")
+    print("  If it was ON and is now OFF, a container recreate dropped the live")
+    print("  write (fix 70): phase5_apply.sh writes the key into qBittorrent.conf")
+    print("  while qBt is stopped, so an apply + this flag puts it back.")
 else:
     for t in tors:
         cat = (t.get("category") or "").strip()
@@ -405,11 +431,10 @@ fi
 # failure in the body. The body is printed here for exactly that reason.
 if [ "${2:-}" = "--fix-client-password" ]; then
     echo "== fix: Radarr's qBittorrent password -> qBt's current WebUI credential =="
-    PASS="${QB_PASS:-$(qbt_temp_password)}"
+    PASS="$(qb_pass)"
     if [ -z "${PASS:-}" ]; then
-        echo "  no current qBt password available (temp line gone and QB_PASS unset)."
-        echo "  Set a permanent one in the UI (manual 10b), then export QB_PASS=..."
-        echo "  for this flag, or update Radarr's client entry by hand."
+        echo "  no current qBt password available (no $QBPWF, temp line gone,"
+        echo "  QB_PASS unset). Run: sudo bash qbt_admin.sh --set-password"
         exit 4
     fi
     printf '%s' "$PASS" > "$TMP/secret"; chmod 600 "$TMP/secret"
@@ -761,8 +786,12 @@ elif qt:
     t = qt[0]
     print("  NOT YET — a torrent exists (%s, %.1f%%) but Radarr has no queue"
           % (t.get("state"), 100 * (t.get("progress") or 0)))
-    print("  entry for it. That usually means a category/import mismatch;")
-    print("  check Radarr Activity and the qBt category (TODO 10c).")
+    print("  entry for it. Radarr removes a tracked download when its client is")
+    print("  unreachable, so this torrent is an ORPHAN: it finishes but nobody")
+    print("  imports it. Fix the credential (qbt_admin.sh --set-password), then")
+    print("  when the torrent completes run:")
+    print("    sudo bash qbt_admin.sh --import-downloads \"%s\""
+          % (t.get("save_path") or "/data/torrents"))
 else:
     if action:
         print("  ACTION TAKEN — %s ran after this snapshot; Radarr has no" % action)

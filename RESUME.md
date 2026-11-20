@@ -18,8 +18,37 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Guardrail | `VERIFY_FAILS=0`; fix-61 assertions added, mutation test **7/7** |
 | Repository | `git init -b main` done (commits `cc2e33d`, `db7c9bb`, `0e78996`, + fix 68); `tests/` holds the offline mock suites; **no remote yet**, license undecided |
 | Download client (fix 67) | **repaired 2026-11-20**: ban cleared by restart, then `PUT downloadclient/1 -> 202` and `testall isValid=True` |
-| *The Breakfast Club* (radarrId 3) | **downloading** (grabbed 08:25Z, `cat=radarr`); `save_path=/data/torrents` because manual-mode category paths were off — run `qbt_admin.sh --fix-category-paths` for future adds (fix 69) |
-| qBt category paths (fix 69) | **enabled 2026-11-20**: `use_category_paths_in_manual_mode=True` (verified live), `radarr -> /data/torrents/movies`; the in-flight torrent keeps `/data/torrents` (added before the switch) |
+| qBt credential (fix 71) | **must be re-run after every recreate**: the temporary password is regenerated on each container start, so the 09:10 apply broke Radarr again (`isValid=False Authentication Failure`). `sudo bash qbt_admin.sh --set-password` makes it permanent (600 root-only file) |
+| qBt category paths (fix 70) | **live value was lost by the recreate** (`False` after `up -d`); apply now writes it into `qBittorrent.conf` while qBt is stopped, diag fails without it. After an apply: `qbt_admin.sh --status` must show `on disk : …=true` |
+| *The Breakfast Club* (radarrId 3) | **orphaned at 34.3%** during the credential outage: Radarr removed the queue row, the torrent kept downloading. Fix the credential, then at 100% run `qbt_admin.sh --import-downloads "/data/torrents/<torrent folder>"` (a normal queue import will not happen) |
+
+## Next commands (2026-11-20, in order)
+
+```bash
+cd /home/jordan/Documents/SystemBuild
+sudo bash phase5_step1_install.sh          # install the apply/diag/guardrail edits
+sudo bash /usr/local/sbin/phase5/phase5_apply.sh   # writes the path switch while qBt is stopped
+sudo bash /usr/local/sbin/phase5/phase5_diag.sh    # S3 must PASS the path switch
+
+sudo bash qbt_admin.sh --set-password      # ONE atomic credential (qBt + Radarr)
+sudo bash qbt_admin.sh --status            # path mode live AND on disk = True
+sudo bash library_status.sh "breakfast club"   # testall isValid=True
+```
+
+At 100% the torrent is an **orphan** (Radarr dropped the queue row while the
+client was unreachable), so import it explicitly, then scan and reclaim:
+
+```bash
+sudo bash qbt_admin.sh --import-downloads "/data/torrents/<torrent folder>"
+sudo bash jellyfin_admin.sh --scan
+sudo bash library_status.sh "breakfast club"        # want YES
+sudo bash qbt_admin.sh --remove-torrent "breakfast club" --yes   # clears the entry
+```
+
+The manual import resolves to Radarr's `ImportMode.Move`, so the library file is
+a hardlink and the torrent's copy is unlinked by the import: the data is not
+duplicated and `--remove-torrent` returns no space (expected — the library owns
+the inode).
 
 ## Done 2026-11-19 (scripted — manual 10j)
 

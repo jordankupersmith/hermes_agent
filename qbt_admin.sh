@@ -5,7 +5,9 @@
 #
 #   sudo bash qbt_admin.sh --status
 #   sudo bash qbt_admin.sh --remove-torrent "Project.Hail.Mary" [--yes]
-#   sudo bash qbt_admin.sh --first-run      (category + Radarr field + path mode)
+#   sudo bash qbt_admin.sh --first-run       (category + Radarr field + path mode)
+#   sudo bash qbt_admin.sh --set-password    (one atomic qBt + Radarr credential)
+#   sudo bash qbt_admin.sh --import-downloads [path]
 #   sudo bash qbt_admin.sh --create-category radarr /data/torrents/movies
 #   sudo bash qbt_admin.sh --set-radarr-category radarr
 #   sudo bash qbt_admin.sh --fix-category-paths
@@ -15,15 +17,23 @@
 # password. The WebUI is VM-only (never on the LAN) — this runs on clawbox and
 # talks to the VM-side published port.
 #
-# Secrets: the WebUI password is read from $QB_PASS, else the first-run
-# "temporary password" line in the container log, else prompted (never echoed,
-# never written to a file we keep).
+# Secrets: the WebUI password is read from $QB_PASS, else
+# /etc/media-vm/qbt_webui_password (600 root:root — written by --set-password),
+# else the first-run "temporary password" line in the container log, else
+# prompted. It is never echoed and never appears in argv.
 
 set -uo pipefail
 
 QB="http://192.168.122.10:8080"
 RD="http://192.168.122.10:7878"
 ENVF=/opt/media-assistant/.env
+# fix 71 — the permanent WebUI credential. qBittorrent generates a NEW temporary
+# password every time it starts with no password configured, so a container
+# recreate (any apply run) invalidates what Radarr stored: Radarr then keeps
+# retrying the old one, bans itself (5 failures / 3600 s, per source IP), and
+# reports the ban as "Authentication Failure". One stored credential removes the
+# whole class. Root-only, same directory and mode as vpn.env.
+QBPWF=/etc/media-vm/qbt_webui_password
 JAR="$(mktemp)"
 TMP="$(mktemp -d)"
 trap 'rm -f "$JAR"; rm -rf "$TMP"' EXIT
@@ -35,6 +45,211 @@ VM=jordan@192.168.122.10
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# ---- shared credential plumbing (fix 71) ------------------------------------
+# One block, four modes, so the same code can be driven against a fake server by
+# tests/test_qbt_pw.py. Secrets travel in 0600 files, never in argv.
+cat > "$TMP/pw.py" <<'PY'
+"""qBittorrent <-> Radarr WebUI credential plumbing (fix 71).
+
+  set    <qb_base> <user> <curpw_file> <newpw_file>
+  radarr <rd_base> <api_key_file> <newpw_file>
+  test   <rd_base> <api_key_file>
+  import <rd_base> <api_key_file> <path>
+
+Exit codes are a contract with the shell wrapper:
+  4  the CURRENT qBt password was rejected
+  5  the source IP is banned (qBt answers 403) — restart qBittorrent
+  6  setPreferences was rejected
+  7  the NEW password did not take (a fresh login still fails)
+  8  Radarr refused the update, or has no qBittorrent client
+  9  Radarr's own testall is not valid
+ 10  the import command was rejected
+"""
+import http.cookiejar
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# qBittorrent rejects a foreign Host header (HostHeaderValidation) and requires
+# Referer/Origin to match it for POSTs, exactly like the curl wrapper does.
+QH = {"Host": "localhost:8080",
+      "Referer": "http://localhost:8080/",
+      "Origin": "http://localhost:8080/"}
+
+
+def opener():
+    return urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+
+def form(op, url, data):
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(
+        url, data=body,
+        headers=dict(QH, **{"Content-Type": "application/x-www-form-urlencoded"}))
+    try:
+        with op.open(req, timeout=30) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def login(base, user, password):
+    op = opener()
+    st, body = form(op, base + "/api/v2/auth/login",
+                    {"username": user, "password": password,
+                     "referer": "http://localhost:8080/"})
+    return op, st, body.strip()
+
+
+def rejected(st, body):
+    if st == 403 or "banned" in body.lower():
+        print("  qBittorrent answered HTTP %s: the source IP is BANNED" % st)
+        print("  (5 failed logins -> BanDuration 3600 s, and the list is in")
+        print("   memory only — a qBittorrent restart clears it)")
+        return 5
+    print("  qBittorrent rejected the CURRENT password (HTTP %s, %r)"
+          % (st, body[:120]))
+    return 4
+
+
+def secret(path):
+    return open(path, "r", encoding="utf-8").read().strip()
+
+
+def rd(base, key, path, method="GET", body=None):
+    h = {"X-Api-Key": key}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        h["Content-Type"] = "application/json"
+    req = urllib.request.Request(base + path, data=data, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read()
+            try:
+                return r.status, (json.loads(raw) if raw else None)
+            except Exception:
+                return r.status, raw.decode("utf-8", "replace")[:600]
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw)
+        except Exception:
+            return e.code, raw.decode("utf-8", "replace")[:600]
+
+
+mode = sys.argv[1]
+
+if mode == "set":
+    base, user = sys.argv[2].rstrip("/"), sys.argv[3]
+    cur, new = secret(sys.argv[4]), secret(sys.argv[5])
+    if not new:
+        print("  no new password supplied"); raise SystemExit(6)
+
+    op, st, body = login(base, user, cur)
+    if body != "Ok.":
+        raise SystemExit(rejected(st, body))
+    print("  current password: accepted")
+
+    st, body = form(op, base + "/api/v2/app/setPreferences",
+                    {"json": json.dumps({"web_ui_username": user,
+                                         "web_ui_password": new})})
+    if st == 403:
+        raise SystemExit(rejected(st, body))
+    if st != 200:
+        print("  POST app/setPreferences -> HTTP %s (want 200): %r"
+              % (st, body[:200]))
+        raise SystemExit(6)
+    print("  POST app/setPreferences -> HTTP 200 (qBt hashes it server-side)")
+
+    # The live cookie keeps working even if the value was dropped, so the only
+    # proof is a brand-new session.
+    _, st2, body2 = login(base, user, new)
+    if body2 != "Ok.":
+        print("  the NEW password did not take (fresh login: HTTP %s, %r)"
+              % (st2, body2[:120]))
+        raise SystemExit(7)
+    print("  fresh login with the new password: OK")
+    raise SystemExit(0)
+
+if mode == "radarr":
+    base = sys.argv[2].rstrip("/")
+    key, new = secret(sys.argv[3]), secret(sys.argv[4])
+
+    st, clients = rd(base, key, "/api/v3/downloadclient")
+    qb = [c for c in (clients or [])
+          if (c.get("implementation") or "").lower().startswith("qbittorrent")]
+    if not qb:
+        print("  no qBittorrent download client configured"); raise SystemExit(8)
+    c, cid = qb[0], qb[0]["id"]
+    fields = c.get("fields") or []
+    if not any(f.get("name") == "password" for f in fields):
+        print("  the client has no 'password' field — Radarr schema change?")
+        raise SystemExit(8)
+    for f in fields:
+        if f.get("name") == "password":
+            f["value"] = new
+    c["fields"] = fields
+
+    st, body = rd(base, key, "/api/v3/downloadclient/%d" % cid, "PUT", c)
+    print("  PUT downloadclient/%d -> HTTP %s%s"
+          % (cid, st, " (202 = saved)" if 200 <= int(st) < 300 else ""))
+    if not (200 <= int(st) < 300):
+        print("  Radarr rejected it (it tests the client on save):")
+        print("   ", json.dumps(body)[:700] if isinstance(body, (dict, list)) else body)
+        raise SystemExit(8)
+
+    st, after = rd(base, key, "/api/v3/downloadclient/%d" % cid)
+    got = next((f.get("value") for f in (after.get("fields") or [])
+                if f.get("name") == "password"), None)
+    # Informational only: a build that does not echo the secret must not be
+    # treated as a failure — the saved-client test below is the real proof.
+    print("  read-back: password field %s"
+          % ("matches" if got == new else "not echoed (testall decides)"))
+    raise SystemExit(0)
+
+if mode == "test":
+    base = sys.argv[2].rstrip("/")
+    key = secret(sys.argv[3])
+    st, rows = rd(base, key, "/api/v3/downloadclient/testall", "POST")
+    rows = rows if isinstance(rows, list) else [rows]
+    ok = True
+    for r in rows:
+        if not isinstance(r, dict):
+            print("    (unexpected row: %r)" % (r,)); ok = False; continue
+        print("    #%s %-18s isValid=%s" % (r.get("id"), r.get("name"), r.get("isValid")))
+        for f in r.get("validationFailures") or []:
+            print("      failure:", f.get("errorMessage") or f)
+        ok = ok and bool(r.get("isValid"))
+    if not rows or not any(isinstance(r, dict) for r in rows):
+        print("  no client returned a verdict"); raise SystemExit(9)
+    raise SystemExit(0 if ok else 9)
+
+if mode == "import":
+    base = sys.argv[2].rstrip("/")
+    key, path = secret(sys.argv[3]), sys.argv[4]
+    st, body = rd(base, key, "/api/v3/command", "POST",
+                  {"name": "DownloadedMoviesScan", "path": path})
+    print("  POST command DownloadedMoviesScan path=%s -> HTTP %s%s"
+          % (path, st, " (201 = queued)" if 200 <= int(st) < 300 else ""))
+    if not (200 <= int(st) < 300):
+        print("   ", json.dumps(body)[:600] if isinstance(body, (dict, list)) else body)
+        raise SystemExit(10)
+    print("  command id: %s (Radarr scans that folder and imports what it"
+          " recognises)" % (body or {}).get("id"))
+    print("  NOTE: this is a manual import, so Radarr runs ImportMode Auto ->")
+    print("  Move: with hardlinks on it hardlinks into the library and unlinks")
+    print("  the torrent's copy (no duplicated data; the torrent then shows")
+    print("  missing files). Delete the torrent entry afterwards instead of")
+    print("  expecting disk space back.")
+    raise SystemExit(0)
+
+print("unknown mode %r" % mode); raise SystemExit(2)
+PY
+
 # ---- shared curl wrapper (Host/Referer/Origin kept consistent) --------------
 qb() {  # qb <path> [curl args...]
     local path="$1"; shift
@@ -45,23 +260,44 @@ qb() {  # qb <path> [curl args...]
         "$@" "$QB$path"
 }
 
+qb_pass() {
+    # Prints the CURRENT WebUI password on stdout; the provenance line goes to
+    # stderr, so the secret never lands in captured output.
+    if [ -n "${QB_PASS:-}" ]; then
+        echo "  using \$QB_PASS" >&2
+        printf '%s' "$QB_PASS"; return 0
+    fi
+    if [ -r "$QBPWF" ]; then
+        local p; p="$(head -n1 "$QBPWF" 2>/dev/null)"
+        if [ -n "$p" ]; then
+            echo "  using the stored WebUI password ($QBPWF, 600 root-only)" >&2
+            printf '%s' "$p"; return 0
+        fi
+    fi
+    local t
+    t="$(ssh "${K[@]}" "$VM" \
+        'sudo docker logs qbittorrent 2>&1 | grep -i "temporary password" | tail -1' \
+        2>/dev/null | sed -n 's/.*password[^:]*: *//p')"
+    if [ -n "$t" ]; then
+        echo "  using the first-run temporary password from the container log" >&2
+        printf '%s' "$t"; return 0
+    fi
+    if [ -t 0 ]; then
+        local p; read -rsp "qBittorrent WebUI password: " p; echo >&2
+        printf '%s' "$p"; return 0
+    fi
+    return 0
+}
+
 qb_login() {
     # already authenticated? (subnet whitelist or a live session)
     local v
     v="$(qb /api/v2/app/version 2>/dev/null)"
     case "$v" in v*) echo "  qBittorrent $v (session already authorised)"; return 0 ;; esac
 
-    local pass="${QB_PASS:-}"
-    if [ -z "$pass" ]; then
-        pass="$(ssh "${K[@]}" "$VM" \
-            'sudo docker logs qbittorrent 2>&1 | grep -i "temporary password" | tail -1' \
-            2>/dev/null | sed -n 's/.*password[^:]*: *//p')"
-        [ -n "$pass" ] && echo "  using the first-run temporary password from the container log"
-    fi
-    if [ -z "$pass" ]; then
-        read -rsp "qBittorrent WebUI password: " pass; echo
-    fi
-    [ -n "$pass" ] || die "no qBittorrent password available (set QB_PASS=...)"
+    local pass
+    pass="$(qb_pass)"
+    [ -n "$pass" ] || die "no qBittorrent password available (set QB_PASS=..., or run --set-password)"
 
     local r
     r="$(qb /api/v2/auth/login --data-urlencode 'username=admin' \
@@ -90,6 +326,19 @@ if not p.get("use_category_paths_in_manual_mode"):
     print("  this OFF the category savePath is ignored and everything lands in")
     print("  the default path. Fix: sudo bash qbt_admin.sh --fix-category-paths")
 '
+    # fix 70 — is the LIVE value also ON DISK? qBittorrent holds settings in
+    # memory (SettingsStorage writes 5 s later, plus once on a clean shutdown),
+    # so a container recreate can lose a live-only write: observed 2026-11-20,
+    # live True before `up -d` recreated the container and False after. The conf
+    # is the durable copy, and phase5_apply.sh now writes it while qBt is
+    # stopped.
+    QBCAT="$(ssh "${K[@]}" "$VM" \
+        'grep -a "UseCategoryPathsInManualMode" /data/config/qbittorrent/qBittorrent.conf' 2>/dev/null)"
+    case "$QBCAT" in
+        *"=true") echo "  on disk                      : ${QBCAT##*\\} (survives a restart)" ;;
+        "")       echo "  on disk                      : ABSENT <-- a recreate loses the live value (fix 70)" ;;
+        *)        echo "  on disk                      : ${QBCAT##*\\} <-- not true (fix 70)" ;;
+    esac
     echo "== categories =="
     qb /api/v2/torrents/categories | python3 -c '
 import json,sys
@@ -416,6 +665,114 @@ print("  verify: OK")
 PY
 }
 
+cmd_set_password() {
+    # fix 71 — ONE operation, because the two halves are useless apart and the
+    # ordering is what makes it safe:
+    #   1. prove the current credential from here (host IP - a different source
+    #      from Radarr, so a Radarr ban does not block the repair);
+    #   2. set the new one and PROVE it with a fresh login;
+    #   3. store it root-only BEFORE touching Radarr, so a later failure is
+    #      recoverable (every helper reads that file first);
+    #   4. rewrite Radarr's download client with it;
+    #   5. restart qBittorrent — the ban list is in memory, and Radarr's retries
+    #      created one while the two disagreed;
+    #   6. require Radarr's own saved-client test to pass before claiming done.
+    # Skipping 4 while doing 2 is exactly how the ban comes back: Radarr polls
+    # every ~60 s and bans its own source IP after 5 failures.
+    local restart=1
+    [ "${1:-}" = "--no-restart" ] && restart=0
+
+    qb_login
+
+    local new="${QB_NEW_PASS:-}"
+    if [ -z "$new" ]; then
+        new="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+        echo "  new password: generated (24 chars, [A-Za-z0-9_-])"
+    else
+        echo "  new password: from \$QB_NEW_PASS"
+    fi
+    [ "${#new}" -ge 12 ] || die "the new password must be at least 12 characters"
+
+    local pass; pass="$(qb_pass)"
+    [ -n "$pass" ] || die "no current qBittorrent password to replace"
+    printf '%s' "$pass" > "$TMP/curpw"; chmod 600 "$TMP/curpw"
+    printf '%s' "$new"  > "$TMP/newpw"; chmod 600 "$TMP/newpw"
+    local key; key="$(rdk)"; [ -n "$key" ] || die "no RADARR_API_KEY in $ENVF"
+    printf '%s' "$key" > "$TMP/rd.key"; chmod 600 "$TMP/rd.key"
+
+    echo "== 1/4 qBittorrent: set the WebUI password =="
+    python3 "$TMP/pw.py" set "$QB" admin "$TMP/curpw" "$TMP/newpw" || exit $?
+    rm -f "$TMP/curpw"
+
+    install -m 600 -o root -g root "$TMP/newpw" "$QBPWF" \
+        || die "could not write $QBPWF (the password IS changed - fix that file)"
+    echo "  stored: $QBPWF (600 root:root) - read first by this script and library_status.sh"
+
+    echo "== 2/4 Radarr: the same password in the download client =="
+    python3 "$TMP/pw.py" radarr "$RD" "$TMP/rd.key" "$TMP/newpw"
+    local rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "  the qBittorrent password IS changed and stored, but Radarr still has"
+        echo "  the old one (rc=$rc). Recover with the SAME command - it is idempotent:"
+        echo "    sudo bash $0 --set-password"
+        echo "  (it reads the stored password and rewrites Radarr)"
+        exit "$rc"
+    fi
+
+    if [ "$restart" -eq 1 ]; then
+        echo "== 3/4 restart qBittorrent to clear the in-memory login-ban list =="
+        ssh "${K[@]}" "$VM" 'sudo docker restart qbittorrent >/dev/null && echo "  container restarted"' \
+            || echo "  restart FAILED - Radarr may stay banned for up to an hour"
+        local C=""
+        for _ in $(seq 1 90); do
+            C="$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://192.168.122.10:8080/ 2>/dev/null)"
+            [ "$C" = "200" ] && break
+            sleep 1
+        done
+        echo "  WebUI after restart: HTTP ${C:-(no answer)}"
+        [ "$C" = "200" ] || die "qBittorrent did not come back - check: docker logs qbittorrent"
+    else
+        echo "== 3/4 restart skipped (--no-restart) - a ban, if any, stays =="
+    fi
+
+    echo "== 4/4 Radarr's own saved-client test =="
+    python3 "$TMP/pw.py" test "$RD" "$TMP/rd.key"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "  testall is still invalid. A ban created between the write and the"
+        echo "  restart is the remaining explanation - clear it, then re-sync:"
+        echo "    sudo bash library_status.sh \"<title>\" --fix-qbt-auth"
+        echo "    sudo bash $0 --set-password --no-restart"
+        exit "$rc"
+    fi
+    rm -f "$TMP/newpw"
+
+    echo
+    echo "== done - qBittorrent and Radarr share one permanent credential =="
+    echo "  the WebUI password is in $QBPWF (600 root:root); read it with"
+    echo "    sudo cat $QBPWF"
+    echo "  the container log no longer contains a usable password. Never change"
+    echo "  it in the UI without this script: a half-done change re-creates the"
+    echo "  ban (manual 10b)."
+}
+
+cmd_import_downloads() {
+    # Radarr drops a tracked download when its download client is unreachable
+    # ("download was not found in the client"), so a torrent that keeps
+    # downloading afterwards is an ORPHAN: nobody imports it when it finishes.
+    # DownloadedMoviesScan is the manual-import scanner and needs no queue row.
+    local path="${1:-/data/torrents}"
+    case "$path" in
+        /data/torrents|/data/torrents/*) : ;;
+        *) die "refusing to scan '$path' - only under /data/torrents" ;;
+    esac
+    local key; key="$(rdk)"; [ -n "$key" ] || die "no RADARR_API_KEY in $ENVF"
+    printf '%s' "$key" > "$TMP/rd.key"; chmod 600 "$TMP/rd.key"
+    python3 "$TMP/pw.py" import "$RD" "$TMP/rd.key" "$path"
+}
+
 # ---- dispatch ---------------------------------------------------------------
 case "${1:-}" in
     --status)            cmd_status ;;
@@ -426,6 +783,8 @@ case "${1:-}" in
     --set-radarr-category) [ $# -ge 2 ] || die "usage: --set-radarr-category <name>"
                          cmd_radarr_category "$2" ;;
     --first-run)         cmd_first_run ;;
+    --set-password)      cmd_set_password "${2:-}" ;;
+    --import-downloads)  cmd_import_downloads "${2:-}" ;;
     --fix-category-paths) cmd_category_paths ;;
     *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

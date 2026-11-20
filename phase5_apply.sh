@@ -1131,6 +1131,7 @@ Session\DefaultSavePath=/data/torrents
 Session\Interface=tun0
 Session\InterfaceName=tun0
 Session\Port=37686
+Session\UseCategoryPathsInManualMode=true
 [Preferences]
 WebUI\Port=8080
 QBEOF
@@ -1181,6 +1182,38 @@ else
             ;;
     esac
 fi
+# fix 70 — category paths for MANUAL-mode adds are a SEPARATE switch, and the
+# durable copy has to be this file. Radarr adds a torrent with `category` and
+# neither `savepath` nor `autoTMM`, so qBittorrent runs it in manual mode, where
+# Session\UseCategoryPathsInManualMode (default FALSE) decides between the
+# category path and the session save path. Live evidence 2026-11-20: cat=radarr,
+# category /data/torrents/movies, torrent still at /data/torrents.
+# The live API write is not durable — qBittorrent holds settings in memory and
+# writes them 5 s later (SettingsStorage) plus once on a clean shutdown, so a
+# container recreate that does not get one loses the value (observed: live True
+# before `up -d` recreated the container, False after). Written HERE while
+# qBittorrent is stopped, exactly like the port migration above (fix 56).
+UCP_CUR="$(sed -n 's/^Session\\UseCategoryPathsInManualMode=\(.*\)$/\1/p' "$QBC" 2>/dev/null | head -n1)"
+case "$UCP_CUR" in
+    true) : ;;
+    '')
+        if [ -f "$QBC" ]; then
+            KEYLINE='Session\UseCategoryPathsInManualMode=true'
+            K="$KEYLINE" awk '
+                { print }
+                !done && $0 == "[BitTorrent]" { print ENVIRON["K"]; done=1 }
+                END { if (!done) print "[BitTorrent]\n" ENVIRON["K"] }
+            ' "$QBC" >"$QBC.new" && chown 1001:1001 "$QBC.new" && chmod 600 "$QBC.new" \
+                && mv -f "$QBC.new" "$QBC"
+            echo "qBittorrent.conf inserted Session\\UseCategoryPathsInManualMode=true (fix 70)"
+        fi
+        ;;
+    *)
+        sed -i 's/^Session\\UseCategoryPathsInManualMode=.*$/Session\\UseCategoryPathsInManualMode=true/' "$QBC"
+        chown 1001:1001 "$QBC"
+        echo "qBittorrent.conf rewrote Session\\UseCategoryPathsInManualMode $UCP_CUR -> true (fix 70)"
+        ;;
+esac
 # ---- D. VM ufw: deny incoming / allow outgoing + torrent-port layer ----
 if ! ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw default deny incoming
