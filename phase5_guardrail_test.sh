@@ -1908,6 +1908,64 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G27 complete: fixes 72/73 present"
 
 # ======================================================================
+section "G28 — 2026-11-20 fix 74 (ONE reader for 'is it on disk?')"
+# The 10:10 run printed, in the same command:
+#     on disk : ABSENT <-- a recreate loses the live value (fix 70)
+#     ...      Session\UseCategoryPathsInManualMode=true
+# One call site still grepped the RETIRED path (fix 72) and without sudo, so it
+# read a file that the apply had just deleted and called the result "absent".
+# A durable-copy answer must come from exactly one helper, and "I could not look"
+# must never be printed as "there is nothing there".
+CHK_OK=1
+if grep -Fq 'QBCAT="$(qbc_key '"'"'UseCategoryPathsInManualMode'"'"')"' "$QBT" \
+   && ! grep -Fq 'grep -a "UseCategoryPathsInManualMode"' "$QBT"; then
+    pass "status asks the single qbc_key() helper for the on-disk value (fix 74)"
+else
+    fail "status has its own conf reader — the fix-72 path drift can return silently"
+    CHK_OK=0
+fi
+if grep -Fq "qbc_key 'Password_PBKDF2' | tail -n1" "$QBT" \
+   && grep -Fq 'qbc_key() {' "$QBT"; then
+    pass "the password durability check uses the same helper (one reader, fix 74)"
+else
+    fail "two readers can disagree again — the durable-copy answer is not single-sourced"
+    CHK_OK=0
+fi
+if grep -Fq 'qbc_readable' "$QBT" && grep -Fq "UNKNOWN <--" "$QBT"; then
+    pass "an unreadable conf reports UNKNOWN, never ABSENT (fix 74)"
+else
+    fail "'cannot read it' is still reported as 'it is not there'"
+    CHK_OK=0
+fi
+QB_BADPATH="$(grep -n 'qbittorrent/qBittorrent\.conf' "$QBT" \
+    | grep -v 'qBittorrent/qBittorrent\.conf' \
+    | grep -v '^[0-9]*:QBC_LEGACY=' || true)"
+if [ -z "$QB_BADPATH" ]; then
+    pass "no read of the retired conf path anywhere in qbt_admin.sh (fix 72/74)"
+else
+    fail "qbt_admin.sh still reads the retired path: $(printf '%s' "$QB_BADPATH" | head -1)"
+    CHK_OK=0
+fi
+if grep -Fq 'connection_status' "$QBT" && grep -Fq 'firewalled' "$QBT" \
+   && grep -Fq 'NOT WORKING' "$QBT"; then
+    pass "status explains a stalled download (connection_status + tracker verdict)"
+else
+    fail "a stalled torrent has no diagnosis — 'crawling' stays unattributable"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 74' "$MEMORY" && grep -Fq 'firewalled' "$MANUAL"; then
+        pass "PROJECT_MEMORY records fix 74 and the manual explains 'firewalled'"
+    else
+        fail "the port-forward symptom is not documented where an operator looks"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail (installed copy) — fix 74 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G28 complete: fix 74 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

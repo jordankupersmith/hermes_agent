@@ -418,7 +418,7 @@ Verify the guard actually reloaded (inside media-vm):
 sudo systemctl restart torrent-port-guard.service
 sudo iptables -S DOCKER-USER | grep -c -- '--ctorigdstport .*--ctdir ORIGINAL.*-j DROP'   # expect 8
 sudo iptables -S DOCKER-USER | grep -c -- '--dport 37686.*DROP'                            # expect >= 2
-grep -F 'Session\Port=37686' /data/config/qbittorrent/qBittorrent.conf                     # expect a hit
+sudo grep -aF 'Session\Port=37686' /data/config/qbittorrent/qBittorrent/qBittorrent.conf                     # expect a hit
 ```
 
 ### 3j. Apply is green but diag fails both `Session\Port` checks (fix 56)
@@ -464,7 +464,7 @@ lines afterwards:
 Verify by hand (inside media-vm):
 
 ```bash
-grep -F 'Session\Port=37686' /data/config/qbittorrent/qBittorrent.conf
+sudo grep -aF 'Session\Port=37686' /data/config/qbittorrent/qBittorrent/qBittorrent.conf
 sudo iptables -S DOCKER-USER | grep -c -- '--dport 37686.*DROP'   # expect >= 2
 sudo iptables -S DOCKER-USER | grep -c -- '--dport 51413.*DROP'   # expect 0 (pruned)
 ```
@@ -473,6 +473,48 @@ sudo iptables -S DOCKER-USER | grep -c -- '--dport 51413.*DROP'   # expect 0 (pr
 rows. They are deny-only (strictly more restrictive, never a forwarding path)
 and are left alone deliberately: a generic prune of `DENY` rows could remove an
 unrelated rule you added. Only the script-owned `DOCKER-USER` rows are pruned.
+
+### 3k. A title downloads but crawls, or `--status` says `firewalled` (fix 74)
+
+`sudo bash qbt_admin.sh --status` now answers "why is this slow?" directly:
+
+```
+== transfer ==
+  connection status            : firewalled
+  download / upload            : 0.0 KiB/s / 12.4 KiB/s
+  DHT nodes                    : 412
+== stalled downloads: tracker verdict ==
+  The Breakfast Club 1985 ...
+    udp://tracker.opentrackr.org:1337/announce  working       peers=0    ...
+```
+
+Read it in this order:
+
+| Field | Meaning | Action |
+| --- | --- | --- |
+| `connection_status: connected` | incoming + outgoing peers work | the swarm is the problem, not the stack |
+| `connection_status: firewalled` | **no incoming connections** | the AirVPN port-forward is not reaching this tunnel — see below |
+| `connection_status: disconnected` | no usable network/port | `docker logs gluetun`; check the tunnel and `Session\Port` |
+| tracker `working` + `peers=0` | tracker reachable, nobody has the data | pick another release; nothing to fix in the stack |
+| tracker `NOT WORKING` | tracker dead / DNS blocked | try another indexer/release; this one may never finish |
+| `no HTTP/UDP trackers` | DHT/PEX only (magnet without trackers) | expect it to be slow to start |
+
+`firewalled` still downloads — only from peers it can dial — which is exactly why
+it looks like "the connection is fine but the title crawls". The forward must
+match **the port in the conf and the compose file**: AirVPN binds a forwarded
+port to the **key/server pair**, so changing country or server silently
+invalidates it. Confirm the port in the AirVPN client area is `37686` for the key
+in `vpn.env`, then make the three copies agree (`FIREWALL_VPN_INPUT_PORTS`,
+`TORRENTING_PORT`, `Session\Port`); §8k has the change sequence.
+
+If `connection_status` is `disconnected` **and** the conf carries
+`Session\Interface=tun0`, check the interface name inside the tunnel namespace —
+gluetun uses `tun0` for both OpenVPN and WireGuard today, but a name mismatch
+means qBittorrent binds to nothing:
+
+```bash
+sudo docker exec gluetun ip -o link show | awk -F': ' '{print $2}'
+```
 
 ---
 

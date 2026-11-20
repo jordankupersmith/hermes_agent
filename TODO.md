@@ -79,13 +79,26 @@ Details: manual **Step 10** (10a–10i).
       the key is absent/`false` or the duplicate exists. Gate: after an apply,
       `qbt_admin.sh --status` must show the real path and
       `on disk: UseCategoryPathsInManualMode=true`.
-- [ ] **Decide on the `Session\Interface=tun0` pin for existing installs.** A
-      fresh pre-seed now writes it into the **real** conf (fix 72), so new
-      deployments get the app-level bind; this VM does not, and the diag says so
-      as a `note`. The netns is the actual boundary, so this is belt-and-braces —
-      but either add the migration to `phase5_apply.sh` (converges every install)
-      or drop the claim from the compose header. Do not add it blind: a stale
-      interface name can stall a running client.
+- [ ] **`Session\Interface=tun0` is now live on this VM too — verify it can't
+      bite.** The fix-72 migration carried `Session\Interface(+Name)=tun0` from
+      the retired duplicate into the real conf, so after the 11:1x restart the
+      app-level bind is in effect (diag S3 now PASSes it). It is correct while
+      gluetun's netns uses `tun0` for both OpenVPN and WireGuard, but a name
+      change would leave qBittorrent bound to nothing (`--status` would show
+      `disconnected`). Either pin it deliberately with a startup check that the
+      interface exists in the netns, or drop it and rely on the netns alone
+      (which is the actual boundary). Do not remove it while the client is mid
+      download.
+- [ ] **Diagnose the stalled downloads (both titles, 2026-11-20 11:2xZ).**
+      *Ferris Bueller's Day Off* is `stalledDL` at 8.1 GiB and *The Breakfast
+      Club* is at 77.6% with an ETA in days. `qbt_admin.sh --status` now answers
+      this: `connection_status` (`firewalled` = the AirVPN forward is not
+      reaching this tunnel — the forward is bound to the **key/server pair**, so
+      a server change invalidates it) and a per-tracker verdict (`NOT WORKING`
+      = dead tracker, `working` + `peers=0` = no seeders → pick another
+      release). Manual §3k. Record the outcome here: a port-forward fix must
+      update `FIREWALL_VPN_INPUT_PORTS`, `TORRENTING_PORT` and `Session\Port`
+      together.
 - [ ] **End-to-end request** + hardlink proof (`n=2`, same inode) (10d).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL

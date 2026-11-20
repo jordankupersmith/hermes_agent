@@ -369,18 +369,55 @@ qb_login() {
 
 rdk() { grep -m1 '^RADARR_API_KEY=' "$ENVF" 2>/dev/null | cut -d= -f2-; }
 
+qbc_key() {
+    # qbc_key <ERE> — matching lines from the conf qBittorrent actually reads.
+    # ONE reader for every "is it on disk?" answer (fix 74): the 10:10 run had
+    # `--status` print `on disk: ABSENT` on one line and the real value from the
+    # same file four lines later, because one call site still named the retired
+    # path. Reading through a single helper makes that class of drift impossible
+    # to reintroduce silently.
+    ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
+        "sudo grep -aE '$1' $QBC_REAL 2>/dev/null" 2>/dev/null
+}
+
 qbc_hash() {
     # The persisted WebUI hash (fix 73). Reading it back is how a setPreferences
     # is proven to have reached DISK — qBittorrent buffers settings and writes
     # them ~5 s later, so a restart in that window silently loses them.
-    ssh "${K[@]}" -o ConnectTimeout=15 "$VM" \
-        "sudo grep -a 'Password_PBKDF2' $QBC_REAL 2>/dev/null | tail -n1" 2>/dev/null
+    qbc_key 'Password_PBKDF2' | tail -n1
+}
+
+qbc_readable() {
+    # "key absent" and "could not look" are different answers. Conflating them is
+    # what produced a confident `ABSENT` for a key that was present (fix 74).
+    ssh "${K[@]}" -o ConnectTimeout=15 "$VM" "sudo test -r $QBC_REAL" 2>/dev/null
 }
 
 # ---- commands ---------------------------------------------------------------
 cmd_status() {
     echo "== qBittorrent =="
     qb_login
+    echo "== transfer =="
+    # The one field that explains "it downloads but crawls": connection_status.
+    # `firewalled` = no INCOMING peer connections, i.e. the VPN port-forward is
+    # not reaching this tunnel. Downloads still happen from peers we dial, so the
+    # symptom is a slow/stalled torrent, not an error (manual 10j).
+    qb /api/v2/transfer/info | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("  (unparseable)"); raise SystemExit
+st=d.get("connection_status","?")
+print("  connection status            : %s" % st)
+print("  download / upload            : %.1f KiB/s / %.1f KiB/s" % (
+    (d.get("dl_info_speed") or 0)/1024.0, (d.get("ul_info_speed") or 0)/1024.0))
+print("  DHT nodes                    : %s" % d.get("dht_nodes"))
+if st == "firewalled":
+    print("  NOTE: firewalled = no incoming connections. Check that AirVPN")
+    print("  forwards port 37686 to THIS tunnel, then compose")
+    print("  FIREWALL_VPN_INPUT_PORTS/TORRENTING_PORT + Session\\\\Port together (10j).")
+elif st == "disconnected":
+    print("  NOTE: no usable network/port. Check the tunnel: docker logs gluetun")
+'
     echo "== path mode =="
     qb /api/v2/app/preferences | python3 -c '
 import json,sys
@@ -399,13 +436,20 @@ if not p.get("use_category_paths_in_manual_mode"):
     # live True before `up -d` recreated the container and False after. The conf
     # is the durable copy, and phase5_apply.sh now writes it while qBt is
     # stopped.
-    QBCAT="$(ssh "${K[@]}" "$VM" \
-        'grep -a "UseCategoryPathsInManualMode" /data/config/qbittorrent/qBittorrent.conf' 2>/dev/null)"
-    case "$QBCAT" in
-        *"=true") echo "  on disk                      : ${QBCAT##*\\} (survives a restart)" ;;
-        "")       echo "  on disk                      : ABSENT <-- a recreate loses the live value (fix 70)" ;;
-        *)        echo "  on disk                      : ${QBCAT##*\\} <-- not true (fix 70)" ;;
-    esac
+    # fix 74 — this read used the RETIRED path (no qBittorrent/ subdirectory) and
+    # no sudo, so it reported `ABSENT` while printing `=true` from the real file
+    # in the very same run. Both are now impossible: qbc_key() is the only
+    # reader, and an unreadable conf says UNKNOWN instead of pretending absence.
+    QBCAT="$(qbc_key 'UseCategoryPathsInManualMode')"
+    if ! qbc_readable; then
+        echo "  on disk                      : UNKNOWN <-- $QBC_REAL is not readable (this is NOT 'absent')"
+    else
+        case "$QBCAT" in
+            *"=true") echo "  on disk                      : UseCategoryPathsInManualMode=true (survives a restart)" ;;
+            "")       echo "  on disk                      : ABSENT <-- a recreate loses the live value (fix 70)" ;;
+            *)        echo "  on disk                      : $QBCAT <-- not true (fix 70)" ;;
+        esac
+    fi
     echo "== categories =="
     qb /api/v2/torrents/categories | python3 -c '
 import json,sys
@@ -425,10 +469,46 @@ import json,sys
 d=json.load(sys.stdin)
 if not d: print("  none"); raise SystemExit
 for t in d:
-    print("  %-46s %-9s %6.1f GiB  cat=%s  path=%s" % (
-        t.get("name","")[:46], t.get("state",""),
-        (t.get("size") or 0)/2**30, t.get("category") or "-", t.get("save_path","")))
+    print("  %-40s %-11s %5.1f%% %6.1f GiB %7.0f KiB/s  seeds=%s/%s peers=%s/%s  cat=%s  path=%s" % (
+        t.get("name","")[:40], t.get("state",""),
+        100.0*(t.get("progress") or 0), (t.get("size") or 0)/2**30,
+        (t.get("dlspeed") or 0)/1024.0,
+        t.get("num_seeds"), t.get("num_complete"),
+        t.get("num_leechs"), t.get("num_incomplete"),
+        t.get("category") or "-", t.get("save_path","")))
 '
+    # A stalled torrent is a swarm/tracker/port problem, not a stack problem.
+    # Print the tracker verdict instead of leaving it to guesswork: status 4 is
+    # "not working" (dead tracker or DNS), 2 is "working" (so the swarm is the
+    # reason, not the network).
+    local stalled
+    stalled="$(qb /api/v2/torrents/info | python3 -c '
+import json,sys
+for t in json.load(sys.stdin):
+    st=(t.get("state") or "")
+    if st.startswith("stalled") or st in ("metaDL","error","missingFiles"):
+        print("%s\t%s" % (t.get("hash"), (t.get("name") or "")[:44]))
+')"
+    if [ -n "$stalled" ]; then
+        echo "== stalled downloads: tracker verdict =="
+        while IFS=$'\t' read -r h nm; do
+            [ -n "${h:-}" ] || continue
+            echo "  $nm"
+            qb "/api/v2/torrents/trackers?hash=$h" | python3 -c '
+import json,sys
+names={0:"disabled",1:"not contacted",2:"working",3:"updating",4:"NOT WORKING"}
+try: d=json.load(sys.stdin)
+except Exception: print("    (unparseable)"); raise SystemExit
+rows=[t for t in d if (t.get("url") or "").startswith(("http","udp","ws"))]
+if not rows:
+    print("    no HTTP/UDP trackers — DHT/PEX only")
+for t in rows[:5]:
+    print("    %-44s %-13s peers=%-4s %s" % (
+        (t.get("url") or "")[:44], names.get(t.get("status"), t.get("status")),
+        t.get("num_peers"), (t.get("msg") or "")[:60]))
+'
+        done <<< "$stalled"
+    fi
     echo "== config file qBittorrent actually reads =="
     # fix 72 — the trap that cost three rounds: the app reads
     # /config/qBittorrent/qBittorrent.conf (host: .../qbittorrent/qBittorrent/),
