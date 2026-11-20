@@ -143,9 +143,40 @@ for m in d:
     if term and term not in norm(title):
         continue
     shown += 1
+    # fix 82 — the path Bazarr returns is the .mkv FILE, not the folder. This
+    # block tested `p.startswith(path + "/")`, which can never be true for a
+    # file path, so EVERY movie printed "0 .srt" and "MISSING" no matter what
+    # was on disk. It is fix 79 in the opposite direction: a confident wrong
+    # answer instead of a confident empty one. Join on the directory.
     path = (m.get("path") or "").rstrip("/")
-    mine = [p for p in srts if path and p.startswith(path + "/")]
+    folder = os.path.dirname(path) if os.path.splitext(path)[1] else path
+    mine = sorted(p for p in srts if folder and os.path.dirname(p) == folder)
+
+    def classify(p):
+        b = os.path.basename(p).lower()
+        if b.endswith(".srt"):
+            b = b[:-4]
+        hi = b.endswith(".hi")
+        if hi:
+            b = b[:-3]
+        if b.endswith((".es-mx", ".es-419", ".ea", ".spl")):
+            return "ea", hi
+        if b.endswith((".es", ".spa")):
+            return "es", hi
+        return "?", hi
+
+    # the owner order: ea < es < ea:hi < es:hi (row 1 is the best outcome)
+    RANK = {("ea", False): 1, ("es", False): 2, ("ea", True): 3, ("es", True): 4}
+    LABEL = {1: "LatAm Spanish, non-HI (best)",
+             2: "Castilian Spanish, non-HI",
+             3: "LatAm Spanish, HI",
+             4: "Castilian Spanish, HI"}
+    ranked = sorted(((RANK.get(classify(p), 9), p) for p in mine),
+                    key=lambda x: x[0])
+    miss = [(x.get("code2") or "?") + (".hi" if x.get("hi") else "")
+            for x in (m.get("missing_subtitles") or [])]
     prof = m.get("profileId")
+
     print()
     print("  title      : %s" % title)
     print("  radarrId   : %s   monitored=%s" % (m.get("radarrId"), m.get("monitored")))
@@ -154,23 +185,20 @@ for m in d:
         print("               (no language profile => missing_subtitles is empty)")
     else:
         print("  profileId  : %s" % prof)
-    print("  missing    : %s" % (m.get("missing_subtitles") or []))
-    for f in (m.get("files") or []):
-        print("  bazarr file: %s" % f.get("path"))
-        print("  bazarr subs: %s" % (f.get("subtitles") or []))
+    print("  missing    : %s" % (", ".join(miss) if miss else "none"))
     if mine:
         print("  on disk    : %d .srt" % len(mine))
-        for p in mine:
-            print("               %s" % os.path.basename(p))
-        hi = [p for p in mine if re.search(r"\.hi\.srt$", p, re.I)]
-        if hi:
-            print("  verdict    : es-LA subtitle present (%s)" % os.path.basename(hi[0]))
+        for rank, p in ranked:
+            print("               %-56s %s" % (os.path.basename(p),
+                  LABEL.get(rank, "unclassified")))
+        best = ranked[0][0]
+        if best == 9:
+            print("  verdict    : subtitle present but the language is unclassified")
         else:
-            print("  verdict    : subtitle present, but no .hi. variant")
+            print("  verdict    : %s" % LABEL[best])
     else:
-        print("  on disk    : 0 .srt  <-- the mkv carries none (fix 59), so this")
-        print("               title currently has NO subtitles at all")
-        print("  verdict    : MISSING")
+        print("  on disk    : 0 .srt — no sidecar beside the .mkv")
+        print("  verdict    : MISSING — no Spanish subtitle at all")
 if not shown:
     print("  no movie matches %r. Bazarr sees %d:" % (os.environ.get("TERM"), len(d)))
     for m in d:

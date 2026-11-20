@@ -2119,7 +2119,7 @@ fi
 # The suite must KEEP the assertions the fix depends on: a green suite with the
 # MISSING/profile checks deleted proves nothing (mutation M5 did exactly that).
 if [ -f "$SCRIPT_DIR/tests/test_bz_status.py" ] \
-   && grep -Fq '"verdict    : MISSING" in r.stdout' "$SCRIPT_DIR/tests/test_bz_status.py" \
+   && grep -Fq 'verdict    : MISSING — no Spanish subtitle at all' "$SCRIPT_DIR/tests/test_bz_status.py" \
    && grep -Fq 'Bazarr will NEVER search this movie' "$SCRIPT_DIR/tests/test_bz_status.py" \
    && python3 "$SCRIPT_DIR/tests/test_bz_status.py" >/dev/null 2>&1; then
     pass "offline suite covers every-film / term / no-match / normalised match"
@@ -2268,6 +2268,39 @@ else
     note "docs absent next to the guardrail — fixes 79/80 doc checks skipped"
 fi
 [ "$CHK_OK" -eq 1 ] && pass "G33 complete: fixes 79/80 present"
+
+# ======================================================================
+section "G34 — 2026-11-20 fix 82 (status joins sidecars on the movie DIR)"
+# Bazarr's `path` is the .mkv FILE. bazarr_status.sh joined with
+# p.startswith(path + "/"), which is always false for a file, so every movie
+# printed "0 .srt / MISSING" while subtitles sat beside it.
+CHK_OK=1
+if grep -Fq 'os.path.dirname(p) == folder' "$SCRIPT_DIR/bazarr_status.sh" \
+   && ! grep -Fq 'in srts if path and p.startswith' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "sidecars are joined on the movie directory, not on a file prefix (fix 82)"
+else
+    fail "joins sidecars by a prefix that can never match a .mkv path"
+    CHK_OK=0
+fi
+if grep -Fq 'LatAm Spanish, non-HI (best)' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'Castilian Spanish, HI' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'RANK = ' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "the verdict ranks the four rows in the owner order (ea, es, ea.hi, es.hi)"
+else
+    fail "the verdict cannot tell LatAm from Castilian or HI from non-HI"
+    CHK_OK=0
+fi
+if grep -Fq 'path": BC + "/The Breakfast Club (1985) Bluray-1080p.mkv' \
+        "$SCRIPT_DIR/tests/test_bz_status.py" \
+   && grep -Fq '[decoy]' "$SCRIPT_DIR/tests/test_bz_status.py" \
+   && grep -Fq 'LatAm non-HI wins the verdict' "$SCRIPT_DIR/tests/test_bz_status.py" \
+   && python3 "$SCRIPT_DIR/tests/test_bz_status.py" >/dev/null 2>&1; then
+    pass "offline suite uses the real file-path shape, a decoy folder, and the row order"
+else
+    fail "tests/test_bz_status.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G34 complete: fix 82 present"
 
 # ======================================================================
 echo

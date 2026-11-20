@@ -30,6 +30,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Subtitle policy (fix 78) | **reversed by the owner 2026-11-20**: embedded `spa`/`es`/`es-XX` tracks are now KEPT, other languages dropped; the es-LA `.srt` from Bazarr is preferred, not exclusive. Normalizer + verify + diag S11 + AGENTS Rule 2b + manual 10i + G21 re-pinned. The three existing films keep 0 embedded subs (do not redownload) |
 | Subtitle coverage (fix 80) | **all three films have NO subtitles**: `profileId: NONE` in Bazarr, so it never searches them (the 6-hourly job "succeeds" with no candidates). Fix: `bazarr_status.sh --default-profile` (future syncs) + `--assign-all` (existing). diag S11's `audio=?` was my probe bug — fix 79 |
 | Subtitle write contract (fix 81) | Bazarr's settings POST only applies flat `settings-<section>-<key>` fields; a `settings-<section>` JSON blob returns 204 and stores nothing. `--default-profile` now posts two flat fields; its re-read catches a no-op |
+| Subtitle state 2026-11-20 19:30Z | Ferris: `.es-MX.srt` + `.es.srt` (row 1). Project Hail Mary: `.es-MX.hi.srt` (row 3, satisfies cutoff). Breakfast Club: none yet (job wrote nothing; subf2m throttled) |
 
 ## Next commands (2026-11-20, in order)
 

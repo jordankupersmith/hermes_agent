@@ -1830,9 +1830,16 @@ The block to read is:
 
 ```
   profileId  : NONE  <-- Bazarr will NEVER search this movie
-  on disk    : 0 .srt  <-- the mkv carries none (fix 59) ...
-  verdict    : MISSING
+  missing    : ea, es, ea.hi, es.hi
+  on disk    : 0 .srt — no sidecar beside the .mkv
+  verdict    : MISSING — no Spanish subtitle at all
 ```
+
+When files exist, the verdict names the **best row of the owner order** that is
+present (`LatAm Spanish, non-HI (best)` → `Castilian Spanish, non-HI` →
+`LatAm Spanish, HI` → `Castilian Spanish, HI`), and every sidecar is listed with
+its classification. That ranking is read from the filename (`...es-MX.srt`,
+`...es.srt`, `...es-MX.hi.srt`, `...es.hi.srt`), not guessed from the count.
 
 `profileId: NONE` is the silent cause: with no language profile Bazarr computes
 `missing_subtitles` as **empty**, so there is nothing "missing" to search for and
@@ -1870,8 +1877,16 @@ sudo docker exec bazarr sh -c \
   'grep -n -A60 "def post" /app/bazarr/bazarr/api/system/settings.py'
 ```
 
-A `verdict: es-LA subtitle present` line means the family gets LatAm Spanish from
-the sidecar even though the container carries zero subtitle streams.
+A `verdict: LatAm Spanish, non-HI (best)` line means the family gets LatAm
+Spanish from the sidecar even though the container may carry zero subtitle
+streams. `LatAm Spanish, HI` means only a hearing-impaired track was available
+(row 3); that still satisfies the profile's cutoff, but it is not the preferred
+row. `missing:` lists what Bazarr still wants as `ea`, `es`, `ea.hi`, `es.hi`.
+
+If the script says `MISSING` while a `.srt` is plainly beside the film, that is
+fix 82 territory: the join is on the movie **directory** (`Bazarr` returns the
+`.mkv` path, not a folder), so a false MISSING means the file is in a different
+folder than Bazarr's `path`, not that the file is missing.
 
 **How it runs.** Two units inside `media-vm`, both installed and enabled by
 apply:
