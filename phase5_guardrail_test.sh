@@ -2303,6 +2303,51 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G34 complete: fix 82 present"
 
 # ======================================================================
+section "G35 — 2026-11-20 fix 83 (Jellyfin reads .es-MX.hi as Hindi)"
+# Jellyfin resolves the rightmost filename token as a culture: "hi" is Hindi,
+# and the hearing-impaired repair only fires when the token to its left is a
+# real culture. So Bazarr's LatAm HI file (.es-MX.hi.srt) is mislabelled and
+# the profile must not ask for one. The LatAm non-HI file is still first.
+CHK_OK=1
+if grep -Fq 'want = [mk("ea", False), mk("es", False), mk("es", True)]' \
+        "$SCRIPT_DIR/bazarr_policy.sh" \
+   && ! grep -Fq 'mk("ea", True)' "$SCRIPT_DIR/bazarr_policy.sh" \
+   && grep -Fq 'len(items) == 3' "$SCRIPT_DIR/bazarr_policy.sh"; then
+    pass "the profile has three rows: ea, es, es.hi (fix 83)"
+else
+    fail "the profile still asks for a LatAm HI row (Jellyfin labels it Hindi)"
+    CHK_OK=0
+fi
+if grep -Fq 'if [ "${1:-}" = "--rescan" ]; then' "$SCRIPT_DIR/bazarr_status.sh" \
+   && grep -Fq 'action=scan-disk' "$SCRIPT_DIR/bazarr_status.sh"; then
+    pass "bazarr_status.sh --rescan re-reads a folder after a sidecar change"
+else
+    fail "no --rescan: a renamed sidecar leaves Bazarr's stored rows stale"
+    CHK_OK=0
+fi
+if [ -f "$SCRIPT_DIR/tests/test_bz.py" ] \
+   && grep -Fq 'no LatAm HI row is created' "$SCRIPT_DIR/tests/test_bz.py" \
+   && python3 "$SCRIPT_DIR/tests/test_bz.py" >/dev/null 2>&1; then
+    pass "offline profile suite pins the 3-row order and the cutoff item id"
+else
+    fail "tests/test_bz.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 83' "$MEMORY" \
+       && grep -Fq 'three rows, not four (fix 83)' "$MANUAL" \
+       && grep -Fq 'Hindi' "$MANUAL"; then
+        pass "PROJECT_MEMORY and the manual record why LatAm-HI is excluded"
+    else
+        fail "the Jellyfin/Hindi naming constraint is not in the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail — fix 83 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G35 complete: fix 83 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

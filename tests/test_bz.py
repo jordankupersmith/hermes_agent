@@ -117,7 +117,7 @@ st = State(); srv = serve(st); port = srv.server_address[1]
 r = run(block, port, False)
 check("exit 0", r.returncode == 0, r.stderr[-400:])
 check("no saves", st.saves == [], st.saves)
-check("prints item ids", "id=1" in r.stdout and "id=4" in r.stdout)
+check("prints item ids", "id=1" in r.stdout and "id=3" in r.stdout)
 check("explains cutoff", "cutoff points at item id" in r.stdout)
 srv.shutdown()
 
@@ -130,12 +130,15 @@ check("one save", len(st.saves) == 1, len(st.saves))
 sent = st.saves[0] if st.saves else []
 p1 = next((p for p in sent if p["profileId"] == 1), {})
 items = p1.get("items") or []
-check("order ea,es,ea,es", [i["language"] for i in items] == ["ea", "es", "ea", "es"],
+check("order ea,es,es.hi (fix 83: no LatAm-HI row)",
+      [i["language"] for i in items] == ["ea", "es", "es"],
       [i["language"] for i in items])
-check("hi strings False,False,True,True", [i["hi"] for i in items]
-      == ["False", "False", "True", "True"], [i["hi"] for i in items])
-check("ids 1,2,3,4", [i["id"] for i in items] == [1, 2, 3, 4], [i["id"] for i in items])
-check("cutoff = last item id (4)", p1.get("cutoff") == 4, p1.get("cutoff"))
+check("hi strings False,False,True", [i["hi"] for i in items]
+      == ["False", "False", "True"], [i["hi"] for i in items])
+check("ids 1,2,3", [i["id"] for i in items] == [1, 2, 3], [i["id"] for i in items])
+check("cutoff = last item id (3)", p1.get("cutoff") == 3, p1.get("cutoff"))
+check("no LatAm HI row is created", not any(
+    i["language"] == "ea" and i["hi"] == "True" for i in items), items)
 check("audio_only_include copied", all(i.get("audio_only_include") == "True"
                                        for i in items))
 check("verify OK", "verify: OK" in r.stdout)

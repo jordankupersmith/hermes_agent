@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 #
-# Set the household subtitle policy in Bazarr (decision 2026-11-19):
+# Set the household subtitle policy in Bazarr (owner decision 2026-11-20):
 #
-#   prefer  Spanish (Latino) (non-HI)  ->  Spanish (non-HI)
-#   accept  Spanish (Latino) (HI)      ->  Spanish (HI)      <- e.g. es-MX.hi
+#   1. Spanish (Latino), non-HI   .es-MX.srt   (Jellyfin: Indefinido)
+#   2. Spanish, non-HI            .es.srt      (Jellyfin: Spanish)
+#   3. Spanish, HI                .es.hi.srt   (Jellyfin: Spanish + HI)
+#
+# The LatAm **HI** row was removed on 2026-11-20. Bazarr names it
+# `Title.es-MX.hi.srt`, and Jellyfin's ExternalPathParser walks the name right
+# to left: it resolves "hi" as the Hindi culture, then looks for a culture in
+# "es-MX" (not one) and never reaches the "hi is a hearing-impaired flag"
+# repair, which only fires when a real language was already found (`.es.hi`
+# works; `.es-MX.hi` is Hindi). A wrong-language track is worse than no HI row,
+# so row 3 is Castilian HI, which both systems read correctly. The LatAm
+# non-HI file stays first: Jellyfin shows it as "Indefinido", but the labelled
+# `.es.srt` track means the family always has a proper Spanish track too.
 #
 # Bazarr's profile "items" are (language, forced, hi) triples, and an HI file
-# does NOT satisfy a non-HI item — which is why `es-MX.hi.srt` sits on disk
-# while the movie still reports missing=['ea']. Adding the HI variants makes
-# that file count, while keeping the non-HI LatAm row first in preference order.
+# does NOT satisfy a non-HI item — which is why `es-MX.hi.srt` used to sit on
+# disk while the movie still reported missing=['ea'].
 #
 #   sudo bash bazarr_policy.sh                 # dry run: show what would change
 #   sudo bash bazarr_policy.sh --apply         # change, verify, re-search
@@ -136,7 +146,8 @@ def mk(lang, hi):
         it.setdefault(k, flag(False))
     return it
 
-want = [mk("ea", False), mk("es", False), mk("ea", True), mk("es", True)]
+# three rows: LatAm non-HI, Castilian non-HI, Castilian HI (fix 83)
+want = [mk("ea", False), mk("es", False), mk("es", True)]
 cutoff = int(want[-1]["id"])
 
 new = dict(old)
@@ -204,17 +215,17 @@ items = got.get("items") or []
 langs = [i.get("language") for i in items]
 his   = [as_bool(i.get("hi")) for i in items]
 
-ok = (len(items) == 4
-      and langs == ["ea", "es", "ea", "es"]
-      and his == [False, False, True, True]
+ok = (len(items) == 3
+      and langs == ["ea", "es", "es"]
+      and his == [False, False, True]
       and str(got.get("cutoff")) == str(cutoff))
 if ok:
     show("saved  ", got)
     print("  verify: OK — order, HI flags and cutoff item id round-tripped")
 else:
     print("  verify: MISMATCH — rolling the previous profile back")
-    print("    languages: %r  (wanted ['ea','es','ea','es'])" % langs)
-    print("    hi flags : %r  (wanted [False,False,True,True])" % his)
+    print("    languages: %r  (wanted ['ea','es','es'])" % langs)
+    print("    hi flags : %r  (wanted [False,False,True])" % his)
     print("    cutoff   : %r  (wanted item id %r)" % (got.get("cutoff"), cutoff))
     if push(all_profiles, strict=False) is None:
         print("  ROLLBACK FAILED — restore by hand from:")

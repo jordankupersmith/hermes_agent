@@ -1830,7 +1830,7 @@ The block to read is:
 
 ```
   profileId  : NONE  <-- Bazarr will NEVER search this movie
-  missing    : ea, es, ea.hi, es.hi
+  missing    : ea, es, es.hi
   on disk    : 0 .srt — no sidecar beside the .mkv
   verdict    : MISSING — no Spanish subtitle at all
 ```
@@ -1879,9 +1879,22 @@ sudo docker exec bazarr sh -c \
 
 A `verdict: LatAm Spanish, non-HI (best)` line means the family gets LatAm
 Spanish from the sidecar even though the container may carry zero subtitle
-streams. `LatAm Spanish, HI` means only a hearing-impaired track was available
-(row 3); that still satisfies the profile's cutoff, but it is not the preferred
-row. `missing:` lists what Bazarr still wants as `ea`, `es`, `ea.hi`, `es.hi`.
+streams. `missing:` lists what Bazarr still wants as `ea`, `es`, `es.hi`.
+
+**The profile has three rows, not four (fix 83).** The LatAm **HI** row was
+removed: Bazarr names that file `Title.es-MX.hi.srt`, and Jellyfin parses
+filenames right-to-left, resolving `hi` as the **Hindi** culture and failing to
+recognise `es-MX` as a language, so the "hi is the hearing-impaired flag"
+repair never fires. A track labelled Hindi is worse than no HI row. Row 3 is
+Castilian HI (`Title.es.hi.srt`), which Jellyfin reads as *Spanish + HI*
+because `es` is a real language. The LatAm non-HI file is still first in the
+profile; Jellyfin shows it as **Indefinido** (not a wrong language), and every
+film also gets a labelled `.es.srt`, so the TV always has a proper Spanish
+track to pick.
+
+`bazarr_status.sh` still *classifies* a `.es-MX.hi.srt` if one is already on
+disk (it prints `LatAm Spanish, HI`, and diag will not lie about it), but the
+profile no longer asks for one and no new one will be downloaded.
 
 If the script says `MISSING` while a `.srt` is plainly beside the film, that is
 fix 82 territory: the join is on the movie **directory** (`Bazarr` returns the
@@ -2073,6 +2086,22 @@ It prints the `source:` it used. On builds where an API key has no user
 attached, `/Items` answers with an **empty set rather than an error**, so the
 helper retries through `/Users/<id>/Items` before concluding the library is
 empty — otherwise a working library would look like a failed scan.
+
+Observed 2026-11-20 (fix 83): `.es.srt` → `spa Spanish`; **`.es-MX.srt` →
+`? … Indefinido`**; **`.es-MX.hi.srt` → `hin … Hindi`**. Jellyfin's
+`ExternalPathParser` takes the rightmost token as a culture, so `hi` becomes
+Hindi before any hearing-impaired-flag handling, and the repair branch
+(`Language == "hin"` + a real culture to its left) never runs when the token is
+`es-MX`. `.es.hi.srt` *does* repair to Spanish+HI. That is why the profile has
+no LatAm-HI row.
+
+When a sidecar is renamed outside Bazarr (or the normalizer strips embedded
+tracks, which Bazarr still believes are there), re-read the folder so Bazarr's
+stored rows match the disk:
+
+```bash
+sudo bash bazarr_status.sh --rescan "breakfast"   # PATCH action=scan-disk
+```
 
 It reads an **existing** API key from `jellyfin.db` *inside the VM*, uses it
 there, and never prints it. If the DB has no key it exits 2 and prints the two

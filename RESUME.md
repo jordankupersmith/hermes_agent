@@ -30,7 +30,7 @@ backlog in `TODO.md`, and the agent rules in `AGENTS.md`.
 | Subtitle policy (fix 78) | **reversed by the owner 2026-11-20**: embedded `spa`/`es`/`es-XX` tracks are now KEPT, other languages dropped; the es-LA `.srt` from Bazarr is preferred, not exclusive. Normalizer + verify + diag S11 + AGENTS Rule 2b + manual 10i + G21 re-pinned. The three existing films keep 0 embedded subs (do not redownload) |
 | Subtitle coverage (fix 80) | **all three films have NO subtitles**: `profileId: NONE` in Bazarr, so it never searches them (the 6-hourly job "succeeds" with no candidates). Fix: `bazarr_status.sh --default-profile` (future syncs) + `--assign-all` (existing). diag S11's `audio=?` was my probe bug — fix 79 |
 | Subtitle write contract (fix 81) | Bazarr's settings POST only applies flat `settings-<section>-<key>` fields; a `settings-<section>` JSON blob returns 204 and stores nothing. `--default-profile` now posts two flat fields; its re-read catches a no-op |
-| Subtitle state 2026-11-20 19:50Z | **all three have a Spanish sidecar**: Ferris + Breakfast Club `.es-MX.srt`/`.es.srt` (row 1), PHM `.es-MX.hi.srt` (row 3). Next: `jellyfin_admin.sh --scan` + `--subs` |
+| Subtitle state 2026-11-20 21:20Z | Jellyfin labels `.es.srt` Spanish, `.es-MX.srt` Indefinido, `.es-MX.hi.srt` **Hindi**. Owner chose to drop the LatAm-HI row: apply the 3-row profile (`ea, es, es.hi`), delete PHM's old `.hi` file, `--rescan`, `--search`, scan, `--subs` |
 
 ## Next commands (2026-11-20, in order)
 

@@ -116,13 +116,18 @@ Details: manual **Step 10** (10a–10i).
       Ferris `.es-MX.srt` + `.es.srt`; Breakfast Club the same pair after
       `--search` (the first attempt wrote nothing — transient provider miss);
       Project Hail Mary `.es-MX.hi.srt` (row 3, cutoff satisfied).
-- [ ] **Confirm Jellyfin indexes them** (the sidecar existing is only half the
-      contract):
-      `sudo bash jellyfin_admin.sh --scan` then
-      `sudo bash jellyfin_admin.sh --subs` → every film should show
-      `verdict: N Spanish subtitle stream(s) indexed`, exit 0. A
-      `language NOT parsed from the filename` line means the `.es-MX` suffix
-      needs a different name.
+- [x] **Jellyfin indexing verified — and it exposed a naming bug (fix 83).**
+      `--subs` reports `.es.srt` as `spa Spanish`, `.es-MX.srt` as
+      `? Indefinido`, and `.es-MX.hi.srt` as **`hin Hindi`**: Jellyfin resolves
+      the rightmost filename token as a culture, and the HI repair only fires
+      when the token to its left is a real culture (`es`, not `es-MX`).
+- [ ] **Apply the 3-row profile (owner decision: drop LatAm-HI only).**
+      `sudo bash bazarr_policy.sh --apply --movie 1` → rows `ea, es, es.hi`,
+      cutoff on `es.hi`. Then remove PHM's now-unwanted
+      `Project Hail Mary (2026) Remux-1080p.es-MX.hi.srt`, `--rescan 1`, and
+      `--search` each film. Ferris/Breakfast will gain `.es.hi.srt`
+      (Jellyfin: Spanish + HI); PHM will gain `.es-MX.srt` + `.es.srt`.
+      Then `jellyfin_admin.sh --scan` + `--subs` → no `hin`, no `?`.
 - [ ] **Re-install + diag to verify fix 79 live**: `phase5_step1_install.sh`
       then `phase5_diag.sh`; S11 must print audio/subs **and languages** for the
       newest file with no `audio=?`.

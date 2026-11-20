@@ -8,6 +8,7 @@
 #   sudo bash bazarr_status.sh --assign <radarrId|title>
 #   sudo bash bazarr_status.sh --assign-all       (# every movie with no profile)
 #   sudo bash bazarr_status.sh --default-profile  (# future Radarr syncs)
+#   sudo bash bazarr_status.sh --rescan <radarrId|title>
 #   sudo bash bazarr_status.sh --search <radarrId|title>
 #   sudo bash bazarr_status.sh --upgrade          (# "Upgrade Previously
 #                                                  Downloaded Subtitles" task)
@@ -40,7 +41,7 @@ VM=jordan@192.168.122.10
 # A title term (any non-flag first argument) narrows every list below.
 TERM=""
 case "${1:-}" in
-    --assign|--assign-all|--search|--upgrade|--default-profile) : ;;
+    --assign|--assign-all|--search|--upgrade|--default-profile|--rescan) : ;;
     "") : ;;
     *) TERM="$1" ;;
 esac
@@ -406,6 +407,33 @@ print(d[0]["profileId"] if d else "")' 2>/dev/null)"
     fi
 fi
 
+# opt-in action: re-read one movie's folder so Bazarr's stored subtitle rows
+# match the disk. Needed after the normalizer strips embedded tracks, and after
+# a sidecar is renamed by hand; without it `missing_subtitles` keeps describing
+# the file that used to be there (fixes 82/83).
+if [ "${1:-}" = "--rescan" ]; then
+    SID="$(resolve_rid "${2:-}")"
+    [ -n "$SID" ] || SID="$(first_radarrid)"
+    echo "== scan-disk for radarrId ${SID:-?} =="
+    CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 120 -X PATCH \
+        -H "X-API-KEY: $KEY" "$BASE/api/movies?radarrid=$SID&action=scan-disk")"
+    echo "  HTTP $CODE (204 = scan ran)"
+    sleep 2
+    api "/api/movies?radarrid=$SID" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("  (unparseable response)"); raise SystemExit
+m = d.get("data", d) if isinstance(d, dict) else d
+if isinstance(m, list): m = m[0] if m else {}
+miss = [(x.get("code2") or "?") + (".hi" if x.get("hi") else "")
+        for x in (m.get("missing_subtitles") or [])]
+print("  missing now:", ", ".join(miss) if miss else "none")
+print("  rows       :", [(x.get("code2"),
+                          (x.get("path") or "").rsplit("/", 1)[-1])
+                         for x in (m.get("subtitles") or [])])
+'
+fi
+
 # opt-in action: force a search for one movie (writes nothing but the .srt)
 if [ "${1:-}" = "--search" ]; then
     SID="$(resolve_rid "${2:-}")"
@@ -418,7 +446,7 @@ fi
 
 # opt-in action: run the "Upgrade Previously Downloaded Subtitles" task once.
 # Variant-preserving: upgrade.py searches with the SUBTITLE's own hi flag
-# (is_hi, kept 'True' because the profile now has an HI row for that language)
+# (is_hi stays 'True' because the profile still has an HI row for `es`)
 # and needs score+2, so it can improve an HI file but will not replace it with
 # a non-HI one. The task is always registered; general.upgrade_subs decides
 # whether it has any candidates at all (score < 117, inside days_to_upgrade_subs).
