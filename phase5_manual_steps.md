@@ -2145,6 +2145,32 @@ the command prints the resulting list per film. It refuses to flip the flag if
 then be unable to read audio at all. Use `--rescan` afterwards only for a film
 whose list is still empty.
 
+**fix 86 — a `.hi` suffix is a suspicion, not a fact.** Bazarr decides it *after*
+the download, by regex over the text
+(`subliminal_patch/core.py:1216`, `HI_REGEX_WITH_PARENTHESIS` at line 52 matches
+any `[...]`, `(...)` or `{...}` of 3+ characters). *Project Hail Mary*'s ordinary
+Castilian sidecar was named `.es.hi.srt` because its title card reads
+`<i>Project Hail Mary (2026)</i>` — **1 match in 2445 cue lines**. Jellyfin then
+shows *HI Spanish / Discapacidad Auditiva*, which is what the filename says, not
+what the file is. Rename it beside the film, then re-index (sync + scan-disk +
+recompute):
+
+```bash
+sudo bash bazarr_status.sh --rescan "hail mary"
+```
+
+`missing: es.hi` then remains, exactly as on the other two films — the last row
+is a last resort and retries every 6 h harmlessly.
+
+Two candidate-list traps worth knowing before re-picking anything. A LatAm search
+**cannot** match OpenSubtitles' LatAm files: `download_best_subtitles()` filters
+on `language.basename` (`core.py:562`), the `ea` row is `spl`, and the provider
+tags its files `es-MX` — that row is only satisfied incidentally, when the
+Castilian search returns an MX-tagged subtitle. And a long candidate list is not
+many files: picking `…1080p WEB AC3 H264-DJT` over the auto-chosen release
+produced a **byte-identical** file (same size, same score 97), because
+OpenSubtitles re-uploads the same subtitle under many release names.
+
 It reads an **existing** API key from `jellyfin.db` *inside the VM*, uses it
 there, and never prints it. If the DB has no key it exits 2 and prints the two
 GUI clicks instead of inventing credentials.

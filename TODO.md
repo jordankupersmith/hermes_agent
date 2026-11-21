@@ -135,6 +135,12 @@ Details: manual **Step 10** (10a–10i).
       the file's audio and rebuilds every movie's missing list). Expect PHM to
       show `missing=ea, es, es.hi`; then `--search 1`, `--rescan 1`,
       `jellyfin_admin.sh --scan`, `--subs`.
+- [ ] **PHM's subtitle is plain Castilian, mislabelled `.hi` (fix 86).** The
+      text has 1 HI-regex hit in 2445 cues (the year in the title card), so
+      Bazarr named it `.es.hi.srt` and Jellyfin shows *HI Spanish*. Rename it to
+      `.es.srt` beside the film, then `bazarr_status.sh --rescan 1`,
+      `jellyfin_admin.sh --scan`, `--subs` → expect plain *Spanish* and no
+      `hin`/`HI` line.
 - [ ] **`missing: es.hi` on Ferris/Breakfast is expected, not a fault.** The
       HI row is the last-resort row and the providers have no HI match for these
       releases; the non-HI rows (which the TV uses) are present. Bazarr will
