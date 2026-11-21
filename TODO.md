@@ -358,8 +358,10 @@ stream — but it is no longer the blocker.
       message; discovery + Caddy get `StartLimitIntervalSec=0` so a slow DHCP
       lease cannot leave them dead until reboot.
       Offline: `tests/test_norm_log.py` (24 checks), guardrail **G38**,
-      mutations **9/9**. **Pending:** the rule-3 chain (install → apply → diag);
-      apply is what rewrites the discovery unit / Caddy drop-in on the host.
+      mutations **9/9**. **Rule-3 chain done 2026-11-21 12:59Z:** install
+      copies match, apply `VERIFY_FAILS=0`, diag `VERIFY_FAILS=0`; live
+      `StartLimitIntervalUSec=0` on both units, and S11 now reports the two
+      historical rows as `(2 resolved — fix 61 retries)` instead of a note.
 - [ ] **Client side — ROOT CAUSE FOUND (fix 58, 2026-11-18):** the sideloaded
       build reports `Jellyfin for Tizen 0.1.0 compiled 2026/11/06 @ 00h56 with
       Jellyfin-12.z` (jellyfin-web 12.z) while the stack was pinned to server
