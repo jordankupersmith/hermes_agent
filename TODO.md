@@ -329,6 +329,12 @@ stream — but it is no longer the blocker.
       split). Keep the remux tier allowed — owner ruling 2026-11-21: the
       Breakfast Club picture was good, and `upgradeAllowed=False` everywhere.
 
+      **Applied 2026-11-21 10:29Z:** 6 formats created, `HD-1080p` (id=4)
+      restricted to `WEBDL-1080p, Bluray-1080p, Remux-1080p`, cutoff 7;
+      read-backs OK. Backup of record
+      `/var/backups/phase5/radarr-qualityprofile-4-20261121T102928Z.json`
+      (fix 87c: the second apply reused that name, so it holds the post-CF
+      profile — a revert is `--restore` **plus** deleting the six formats).
       **Deferred on purpose (owner, 2026-11-21):** proving that a *new* search
       rejects a remux is not worth a forced search now. The scores are verified
       by the script's read-back, which is the failure mode that is silent; when

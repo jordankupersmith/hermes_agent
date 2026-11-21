@@ -2076,7 +2076,15 @@ script will say so in `--status` rather than assume it.
 Safety: every write is printed first, `--apply` is required, the profile is
 copied to `/var/backups/phase5/radarr-qualityprofile-<id>-<ts>.json` (0600)
 before the PUT, and the result is read back (a 202 is not proof — fix 84).
-`sudo bash radarr_admin.sh --restore <that file> --apply` puts it back.
+Each write gets its **own** file (`-1`, `-2` on collision): two applies in the
+same second must not share a name, or the second snapshot replaces the state
+before the first (fix 87c).
+
+A full revert is **two** steps, because the backup only knows the profile:
+`sudo bash radarr_admin.sh --restore <file> --apply` restores the quality
+list/cutoff, then delete the six custom formats in *Settings → Custom Formats*
+(deleting a format removes its score from every profile). Restoring the backup
+alone leaves the scores attached.
 
 **Verification.** `diag` section **S11** fails if either unit is not active and
 prints the newest library file's stream counts (`audio=1 subs=0` is the target).

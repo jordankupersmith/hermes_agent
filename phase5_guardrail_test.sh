@@ -2439,7 +2439,10 @@ i_put = (src.find('put("/api/v3/qualityprofile/%s" % prof.get("id"), body)',
                   i_backup) if i_backup >= 0 else -1)
 i_verify = (src.find("read-back does not match the plan", i_put)
             if i_put >= 0 else -1)
-sys.exit(0 if 0 <= i_plan < i_backup < i_put < i_verify else 1)
+# O_EXCL: two applies in the SAME SECOND must not share a backup name (the
+# second used to overwrite the snapshot taken before the first write).
+ok = 0 <= i_plan < i_backup < i_put < i_verify and "os.O_EXCL" in src
+sys.exit(0 if ok else 1)
 PY
 then
     pass "custom formats: plan gate -> backup -> PUT -> read-back, in that order"
@@ -2468,8 +2471,9 @@ if [ -f "$SCRIPT_DIR/tests/test_radarr_cf.py" ] \
    && grep -Fq 'no MediaInfo condition' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
    && grep -Fq 'is not optional (202 is not proof)' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
    && grep -Fq 'the profile is read from the library' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
+   && grep -Fq 'two writes never share a backup' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
    && python3 "$SCRIPT_DIR/tests/test_radarr_cf.py" >/dev/null 2>&1; then
-    pass "offline suite pins title-only formats, idempotence, backup and read-back"
+    pass "offline suite pins title-only formats, idempotence, unique backups and read-back"
 else
     fail "fix 87: tests/test_radarr_cf.py missing, gutted, or failing"
     CHK_OK=0

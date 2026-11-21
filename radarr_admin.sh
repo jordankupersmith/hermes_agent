@@ -306,14 +306,26 @@ def score_map(prof):
 
 
 def backup(prof):
+    """One file per write, never overwrite one. Two applies in the same second
+    used to produce the same name, so the second silently replaced the snapshot
+    that described the state BEFORE the first write (observed 2026-11-21:
+    --custom-formats and --quality-profile both wrote ...T102928Z.json)."""
     try:
         os.makedirs(BACKUP_DIR, exist_ok=True)
-        path = os.path.join(BACKUP_DIR, "radarr-qualityprofile-%s-%s.json"
-                            % (prof.get("id"), time.strftime("%Y%m%dT%H%M%SZ")))
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(prof, fh, indent=1, sort_keys=True)
-        return path
+        stamp = time.strftime("%Y%m%dT%H%M%SZ")
+        for n in range(1000):
+            path = os.path.join(BACKUP_DIR, "radarr-qualityprofile-%s-%s%s.json"
+                                % (prof.get("id"), stamp, "" if n == 0 else "-%d" % n))
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                continue
+            with os.fdopen(fd, "w") as fh:
+                json.dump(prof, fh, indent=1, sort_keys=True)
+            return path
+        die("1000 backups share the name %s* — refusing to PUT" % stamp, 6)
+    except SystemExit:
+        raise
     except Exception as e:                                   # noqa: BLE001
         die("cannot write the profile backup in %s (%r) — refusing to PUT"
             % (BACKUP_DIR, e), 6)

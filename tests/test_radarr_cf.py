@@ -240,6 +240,24 @@ if bk:
     check("the backup is the pre-change profile",
           json.load(open(p))["formatItems"] == [], repr(json.load(open(p))))
 
+print("== two writes never share a backup (same-second collision) ==")
+st = State()
+bdir = tempfile.mkdtemp(prefix="rd-backup-")
+run(st, "custom-formats", apply=1, backup_dir=bdir)
+run(st, "quality-profile", apply=1, backup_dir=bdir)
+files = sorted(os.listdir(bdir), key=lambda f: os.stat(os.path.join(bdir, f)).st_mtime)
+check("two applies produce two distinct backups", len(files) == 2, repr(files))
+if len(files) == 2:
+    first = json.load(open(os.path.join(bdir, files[0])))
+    second = json.load(open(os.path.join(bdir, files[1])))
+    check("the first backup is the pre-score profile", first["formatItems"] == [],
+          repr(first["formatItems"]))
+    check("the second backup records the scores that were just written",
+          len(second["formatItems"]) == 6, repr(second["formatItems"]))
+    check("both are 0600",
+          all(stat.S_IMODE(os.stat(os.path.join(bdir, f)).st_mode) == 0o600
+              for f in files))
+
 print("== a second apply writes nothing (real idempotence) ==")
 st = State()
 run(st, "custom-formats", apply=1, backup_dir=tempfile.mkdtemp())
