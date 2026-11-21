@@ -1097,9 +1097,14 @@ if [ -f "$DIAG" ]; then
     grep -Fq 'ordering cycle|deleted to break' "$DIAG" \
         && pass "diag S10 still flags boot ordering-cycle signatures (fix 50/51)" \
         || { fail "diag S10 no longer flags ordering-cycle signatures (fix 50/51)"; CHK_OK=0; }
-    grep -Fq 'error-signature line(s) in this boot' "$DIAG" \
-        && pass "diag S10 note text matches the real scan window ('this boot')" \
-        || { fail "diag S10 note still claims a window the scan does not use (fix 51)"; CHK_OK=0; }
+    # fix 88 — the note now says "current run" (a later start supersedes boot
+    # errors), so the window assertion must check BOTH the -b scope and the
+    # narrower wording; a note that claims a window the scan does not use is
+    # how fix 51's false alarm survived.
+    grep -Fq 'error-signature line(s) in the current run' "$DIAG" \
+        && grep -Fq 'journalctl -b -u "$U" -n 60 --no-pager' "$DIAG" \
+        && pass "diag S10 note text matches the real scan window (this boot, current run)" \
+        || { fail "diag S10 note text does not match the scan window (fix 51/88)"; CHK_OK=0; }
 else
     fail "phase5_diag.sh not readable — cannot verify fix 51"
     CHK_OK=0
@@ -2502,6 +2507,91 @@ else
     note "docs absent next to the guardrail — fix 87 doc checks skipped"
 fi
 [ "$CHK_OK" -eq 1 ] && pass "G37 complete: fix 87 present"
+
+# ======================================================================
+section "G38 — 2026-11-21 fix 88 (diag reports current faults, never history)"
+# Why: S11 counted every `fail(` line ever written, so the two pre-fix-61 verify
+# retries for Project Hail Mary (container 02:40:54 vs film 02:36:31) warned
+# forever after the next attempt logged `done`; and the journal scan counted the
+# 2026-11-19 boot's pre-DHCP bind failures that a later `Started` had already
+# superseded. A diag that cries wolf trains the owner to ignore it.
+CHK_OK=1
+
+if grep -Fq 'NORM_AWK=' "$DIAG" \
+   && grep -Fq 'UNRESOLVED_FILE=' "$DIAG" \
+   && grep -Fq 'later success for the same file' "$DIAG" \
+   && ! grep -Fq 'grep -c "fail("' "$DIAG"; then
+    pass "diag S11 pairs each fail with a LATER success for the same path"
+else
+    fail "diag S11 still counts bare fail() lines (a fixed bug warns forever)"
+    CHK_OK=0
+fi
+
+if grep -Fq 'JRNL_AWK=' "$DIAG" \
+   && grep -Fq '/ Started | Listening on /' "$DIAG" \
+   && grep -Fq 'error-signature line(s) in the current run' "$DIAG"; then
+    pass "journal scan reports only errors since the unit's last (re)start"
+else
+    fail "journal scan still reports superseded boot-time failures as current"
+    CHK_OK=0
+fi
+
+if grep -Fxq "CADDY_BENIGN='pki.ca.local\",\"msg\":\"failed to install root certificate'" "$DIAG"; then
+    pass "Caddy's documented local-CA line is the ONLY message ignored"
+else
+    fail "the Caddy filter is not the exact documented line — it could hide real errors"
+    CHK_OK=0
+fi
+
+DISC_LIMIT="$(grep -cF 'StartLimitIntervalSec=0' "$APPLY" 2>/dev/null || true)"
+if [ "${DISC_LIMIT:-0}" -ge 2 ] \
+   && grep -Fq 'discovery dead until the next boot' "$APPLY" \
+   && grep -Fq 'the retry loop is deliberately not rate-limited' "$APPLY"; then
+    pass "discovery relay and Caddy survive a LAN IP that arrives after network-online"
+else
+    fail "a slow DHCP lease can still leave discovery/Caddy dead until reboot"
+    CHK_OK=0
+fi
+
+if [ -f "$SCRIPT_DIR/tests/test_norm_log.py" ] \
+   && grep -Fq 'the 2026-11-19 late-DHCP boot race' "$SCRIPT_DIR/tests/test_norm_log.py" \
+   && grep -Fq 'both are resolved by the later done' "$SCRIPT_DIR/tests/test_norm_log.py" \
+   && grep -Fq 'and keeps a real bind error in' "$SCRIPT_DIR/tests/test_norm_log.py" \
+   && python3 "$SCRIPT_DIR/tests/test_norm_log.py" >/dev/null 2>&1; then
+    pass "offline suite pins fail/resolve pairing, current-run journal and the Caddy filter"
+else
+    fail "fix 88: tests/test_norm_log.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+
+if grep -Fq 'note "$NUNR of $NFL normalizer failure line(s) have NO later success' "$DIAG" \
+   && grep -Fq "sed -n 's/^UNRESOLVED_FILE=/    /p'" "$DIAG"; then
+    pass "an unresolved normalizer failure stays a note and prints its path"
+else
+    fail "an unresolved normalizer failure could be reported as clean (or without its path)"
+    CHK_OK=0
+fi
+
+if grep -Fq 'health UNKNOWN (not the same as no failures)' "$DIAG"; then
+    pass "an unreadable normalizer log is UNKNOWN, never 'no failures'"
+else
+    fail "an unreadable normalizer log would be reported as clean (silent all-clear)"
+    CHK_OK=0
+fi
+
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 88' "$MEMORY" \
+       && grep -Fq 'resolved by a later' "$MANUAL" \
+       && grep -Fq 'StartLimitIntervalSec=0' "$MANUAL"; then
+        pass "PROJECT_MEMORY and the manual explain resolved failures and the late-DHCP retry"
+    else
+        fail "fix 88 is not in PROJECT_MEMORY / the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail — fix 88 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G38 complete: fix 88 present"
 
 # ======================================================================
 echo

@@ -335,6 +335,27 @@ scopes the scan to the current boot and ignores deliberate stops — every apply
 restarts the discovery relay, and systemd logs that SIGTERM as
 `status=143` + `Failed with result 'exit-code'`, which is not a fault.
 
+Fix 88 narrows both scans to what is **still true**:
+
+* the journal scan reports only lines from the unit's **current run** — a later
+  `Started` (or `Listening on`, for a socket unit) supersedes earlier errors. On
+  the 2026-11-19 boot the host reached `network-online.target` at 02:14:00.4,
+  but DHCP did not assign `192.168.1.133` until ~02:14:26: the discovery relay
+  exited with `Cannot assign requested address` five times and Caddy eight
+  times, then both started cleanly. Those lines are history, not a live fault.
+  A unit that is *still* failing has no later start, so its errors are still
+  reported — and S5/V8 fail on the missing listener;
+* the retry loop is no longer rate-limited: `StartLimitIntervalSec=0` in the
+  discovery unit and the Caddy drop-in. The default limit (5 starts / 10 s) is
+  one slow DHCP lease away from leaving discovery or the family UI dead until
+  the next boot. A permanent failure is still visible (`systemctl is-active`
+  says `activating`, the listener probe fails, and the current-run errors are
+  printed);
+* Caddy's one documented per-start line — it cannot install its local CA into
+  the system trust store with `admin off` — is ignored **by exact message**
+  (`pki.ca.local","msg":"failed to install root certificate`), so the note
+  keeps meaning something. Any other Caddy error in the same run still counts.
+
 A clean run now prints:
 
 ```
@@ -2088,7 +2109,13 @@ alone leaves the scores attached.
 
 **Verification.** `diag` section **S11** fails if either unit is not active and
 prints the newest library file's stream counts (`audio=1 subs=0` is the target).
-`grep -c "fail(" /var/log/media-normalize.log` should stay at 0.
+The count of `fail(` lines is **not** a health signal: each failure is paired
+with a LATER `done:` (or `ok(already normalized):`) for the **same path**, and
+only an unpaired failure is reported. The two 2026-11-18
+`fail(verify dur=9654->9391)` lines for *Project Hail Mary* are the pre-fix-61
+container-vs-film comparison, resolved by a later `done` at 22:59 — treating
+them as live was the false alarm fix 88 removed. An unreadable log prints
+`UNKNOWN`, never `no failures`.
 
 ---
 

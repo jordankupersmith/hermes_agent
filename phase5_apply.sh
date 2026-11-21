@@ -2022,6 +2022,13 @@ cat >"$CADDY_DROPIN" <<'CADDYUNITEOF'
 [Unit]
 After=network-online.target libvirtd.service
 Wants=network-online.target
+# fix 88 — same late-DHCP race as the discovery relay: Caddy binds
+# 192.168.1.133:8443 and on the 2026-11-19 boot the address appeared ~20 s after
+# network-online.target, so it failed 8 times. Restart=on-failure already
+# recovers, but the default start limit can stop it permanently on a slower
+# lease; the retry loop is deliberately not rate-limited (diag still fails on
+# `caddy.service active` / the 8443 listener if it never binds).
+StartLimitIntervalSec=0
 
 [Service]
 ProtectHome=yes
@@ -2144,6 +2151,14 @@ cat >"$DISCO_SERVICE" <<DISCEOF
 Description=Jellyfin LAN discovery relay (7359/udp -> media-vm 7359, socat, mode=$DISCOVERY_MODE)
 After=network-online.target libvirtd.service
 Wants=network-online.target
+# fix 88 — the relay pins 192.168.1.133:7359, and on 2026-11-19 the DHCP address did
+# not exist until ~20 s AFTER network-online.target was reached: socat exited
+# with "Cannot assign requested address" and systemd restarted it 5 times. The
+# default start limit (5 starts / 10 s) is one slow DHCP lease away from leaving
+# discovery dead until the next boot, so the retry loop is not rate-limited.
+# A permanent failure is still visible: diag reports errors from the unit's
+# CURRENT run, and the listener probe fails while it cannot bind.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

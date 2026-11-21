@@ -346,6 +346,20 @@ stream — but it is no longer the blocker.
       `NO Remux` / `NO TrueHD / Atmos` rows to appear as rejected. No action
       needed until then — a forced search would only re-prove what the
       read-back already shows.
+- [x] **Diag false alarms (fix 88, 2026-11-21)** — S11 counted every `fail(`
+      line ever written, so the two pre-fix-61 verify retries for *Project Hail
+      Mary* (`dur=9654->9391`, later `done` at 22:59) warned forever; the journal
+      scan counted boot-time bind failures that a later `Started` superseded
+      (2026-11-19: `network-online` at 02:14:00.4, DHCP address at ~02:14:26 →
+      discovery 5 exits, Caddy 8 bind attempts, both then healthy).
+      S11 now pairs a failure with a **later** success for the same path and
+      reports only unpaired ones; the journal scan reads only the unit's
+      **current run**; the documented Caddy local-CA line is ignored by exact
+      message; discovery + Caddy get `StartLimitIntervalSec=0` so a slow DHCP
+      lease cannot leave them dead until reboot.
+      Offline: `tests/test_norm_log.py` (24 checks), guardrail **G38**,
+      mutations **9/9**. **Pending:** the rule-3 chain (install → apply → diag);
+      apply is what rewrites the discovery unit / Caddy drop-in on the host.
 - [ ] **Client side — ROOT CAUSE FOUND (fix 58, 2026-11-18):** the sideloaded
       build reports `Jellyfin for Tizen 0.1.0 compiled 2026/11/06 @ 00h56 with
       Jellyfin-12.z` (jellyfin-web 12.z) while the stack was pinned to server

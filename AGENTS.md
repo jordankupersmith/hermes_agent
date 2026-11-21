@@ -137,6 +137,16 @@ outside `192.168.122.10` (LAN exposure is Jellyfin `:8096`, discovery
 ## Known-benign noise
 
 `virsh net-start default` → "network is already active"; stale `ufw` DENY rows
-for the old `51413`; one `caddy.service` error line per boot;
-`"EndpointAddress": null` in the discovery JSON; `WebRootPath /wwwroot` warning;
-`ServerName` showing a container ID until it is renamed in *Dashboard → General*.
+for the old `51413`; one `caddy.service` error line per boot (`pki.ca.local` →
+"failed to install root certificate" — Caddy cannot write the system trust store
+with `admin off`); `"EndpointAddress": null` in the discovery JSON;
+`WebRootPath /wwwroot` warning; `ServerName` showing a container ID until it is
+renamed in *Dashboard → General*.
+
+Also benign, but only because it self-heals: **bind failures in the first ~25 s
+of a boot**, before DHCP assigns `192.168.1.133` (`Cannot assign requested
+address` from the `7359` relay or Caddy on `:8443`). diag reports only errors
+from each unit's **current run**, so a later `Started` supersedes them; a unit
+that never did start stays visible (and its listener probe fails). Both retry
+loops are deliberately not rate-limited (`StartLimitIntervalSec=0`), because the
+default limit could leave discovery / the family UI dead until reboot.

@@ -756,9 +756,59 @@ if [ "$SSH_UP" -eq 1 ]; then
                         || fail "media-normalize.timer is '${MT:-absent}'"
     [ "$MP" = "active" ] && pass "media-normalize.path active (new-title trigger)" \
                         || fail "media-normalize.path is '${MP:-absent}'"
-    NF="$(vmrun 'sudo grep -c "fail(" /var/log/media-normalize.log 2>/dev/null')"
-    [ "${NF:-0}" -eq 0 ] && pass "no normalizer failures logged" \
-                        || note "$NF normalizer failure line(s) — sudo tail /var/log/media-normalize.log"
+    # fix 88 — a `fail(...)` line is history, not a live fault. Before fix 61
+    # the verify compared the CONTAINER duration (02:40:54 — the German dub) with
+    # the output's FILM duration (02:36:31) and rejected a correct remux twice;
+    # the next attempt logged `done` (2026-11-18 22:39/22:49 vs 22:59). Counting
+    # every `fail(` ever written therefore warned forever about a bug that was
+    # already fixed. Each failure must be paired with a LATER `done:` (or
+    # `ok(already normalized):`) for the SAME path; only unpaired ones are news.
+    # A `fail(......): kept original:` line means the source was left untouched.
+    NORM_AWK="$(cat <<'NORMAWK'
+/ fail\(/ && /kept original: / {
+    p = $0; sub(/^.*kept original: /, "", p)
+    nf++; fp[nf] = p; fat[nf] = NR; ok[nf] = 0; next
+}
+/ fail\(/ { other++; next }
+/ done: / {
+    p = $0; sub(/^[^ ]+ done: /, "", p); sub(/ \(audio:.*$/, "", p)
+    # one pass, so only failures already read can be resolved: a success that
+    # appears EARLIER in the log never pairs with a later failure (tested).
+    for (i = 1; i <= nf; i++) if (fp[i] == p) ok[i] = 1
+    next
+}
+/ ok\(already normalized\): / {
+    p = $0; sub(/^[^ ]+ ok\(already normalized\): /, "", p)
+    for (i = 1; i <= nf; i++) if (fp[i] == p) ok[i] = 1
+    next
+}
+END {
+    r = 0; u = 0
+    for (i = 1; i <= nf; i++) {
+        if (ok[i]) r++
+        else { u++; print "UNRESOLVED_FILE=" fp[i] }
+    }
+    print "FAIL_LINES=" nf + other
+    print "RESOLVED=" r
+    print "UNRESOLVED=" u + other
+}
+NORMAWK
+)"
+    NORM="$(vmrun 'sudo cat /var/log/media-normalize.log 2>/dev/null' | awk "$NORM_AWK")"
+    NFL="$(printf '%s\n' "$NORM" | sed -n 's/^FAIL_LINES=//p')"
+    NRES="$(printf '%s\n' "$NORM" | sed -n 's/^RESOLVED=//p')"
+    NUNR="$(printf '%s\n' "$NORM" | sed -n 's/^UNRESOLVED=//p')"
+    if [ -z "${NFL:-}" ]; then
+        note "normalizer log unreadable in the VM — health UNKNOWN (not the same as no failures)"
+    elif [ "$NFL" -eq 0 ]; then
+        pass "no normalizer failures logged"
+    elif [ "${NUNR:-0}" -eq 0 ]; then
+        pass "$NFL normalizer failure line(s), each followed by a later success for the same file ($NRES resolved — fix 61 retries)"
+    else
+        note "$NUNR of $NFL normalizer failure line(s) have NO later success for the same file:"
+        printf '%s\n' "$NORM" | sed -n 's/^UNRESOLVED_FILE=/    /p'
+        note "a fail keeps the original (nothing was lost) — sudo tail -n 40 /var/log/media-normalize.log"
+    fi
     echo "  recent normalizer log (track counts only, never media content):"
     vmrun 'sudo tail -n 5 /var/log/media-normalize.log 2>/dev/null' | sed 's/^/    /'
     # visibility only (not a FAIL): the newest library file's stream shape.
@@ -817,16 +867,38 @@ fi
 # reported as current forever even though the live boot was clean. Deliberate
 # stops are not failures: apply restarts these relays and systemd logs the
 # SIGTERM as `status=143` + `Failed with result 'exit-code'`.
+# fix 88 — only errors from the unit's CURRENT run count. On the 2026-11-19 boot
+# the host reached network-online.target at 02:14:00.4, but the DHCP address
+# 192.168.1.133 did not exist until ~02:14:26: the discovery relay and Caddy both
+# failed to bind and systemd restarted them. A later `Started` (or `Listening on`
+# for a socket unit) makes those lines history; a unit that is STILL failing has
+# no later start, so its errors keep being reported.
+JRNL_AWK="$(cat <<'JRANLEOF'
+/status=143|exiting on signal 15|Stopping |Stopped / { stop=1; next }
+/Failed with result .exit-code./ && stop == 1 { next }
+/ Started | Listening on / { n=0; stop=0; next }
+{ stop=0; n++; buf[n]=$0 }
+END { for (i = 1; i <= n; i++) print buf[i] }
+JRANLEOF
+)"
+# fix 88 — Caddy cannot install its local CA into the system trust store
+# (`admin off`, no sudo) and logs exactly this line once per start. AGENTS.md
+# lists it as known-benign; ignoring THIS message only keeps the note meaningful
+# (any other error in the same run is still counted).
+CADDY_BENIGN='pki.ca.local","msg":"failed to install root certificate'
 for U in jellyfin-lan-proxy.socket jellyfin-discovery.service caddy.service; do
-    ERRS="$(journalctl -b -u "$U" -n 60 --no-pager 2>/dev/null \
-        | awk '
-            /status=143|exiting on signal 15|Stopping |Stopped / { stop=1; next }
-            /Failed with result .exit-code./ && stop == 1 { next }
-            { stop=0; print }
-        ' \
+    RAW="$(journalctl -b -u "$U" -n 60 --no-pager 2>/dev/null)"
+    BENIGN=0
+    if [ "$U" = "caddy.service" ]; then
+        BENIGN="$(printf '%s\n' "$RAW" | grep -cF "$CADDY_BENIGN" || true)"
+        RAW="$(printf '%s\n' "$RAW" | grep -vF "$CADDY_BENIGN" || true)"
+    fi
+    ERRS="$(printf '%s\n' "$RAW" | awk "$JRNL_AWK" \
         | grep -ciE 'traceback|critical|failed|denied|ordering cycle|deleted to break' || true)"
     if [ "${ERRS:-0}" -ge 1 ]; then
-        note "$U: $ERRS error-signature line(s) in this boot — review: journalctl -b -u $U -n 20"
+        note "$U: $ERRS error-signature line(s) in the current run — review: journalctl -b -u $U -n 20"
+    elif [ "${BENIGN:-0}" -ge 1 ]; then
+        pass "$U journal clean of actionable failures ($BENIGN documented local-CA line ignored — AGENTS.md)"
     else
         pass "$U journal clean of failure signatures (this boot)"
     fi
