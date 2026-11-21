@@ -328,6 +328,14 @@ stream — but it is no longer the blocker.
       `--quality-profile --apply` (add `--profile <id>` only if the films are
       split). Keep the remux tier allowed — owner ruling 2026-11-21: the
       Breakfast Club picture was good, and `upgradeAllowed=False` everywhere.
+
+      **Deferred on purpose (owner, 2026-11-21):** proving that a *new* search
+      rejects a remux is not worth a forced search now. The scores are verified
+      by the script's read-back, which is the failure mode that is silent; when
+      the next film is added, read the queue/history and expect the
+      `NO Remux` / `NO TrueHD / Atmos` rows to appear as rejected. No action
+      needed until then — a forced search would only re-prove what the
+      read-back already shows.
 - [ ] **Client side — ROOT CAUSE FOUND (fix 58, 2026-11-18):** the sideloaded
       build reports `Jellyfin for Tizen 0.1.0 compiled 2026/11/06 @ 00h56 with
       Jellyfin-12.z` (jellyfin-web 12.z) while the stack was pinned to server
