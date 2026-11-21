@@ -2409,6 +2409,84 @@ fi
 [ "$CHK_OK" -eq 1 ] && pass "G36 complete: fix 85 present"
 
 # ======================================================================
+section "G37 — 2026-11-21 fix 87 (refuse the releases the normalizer would fix)"
+# The normalizer is the safety net, not the first line of defence. The Custom
+# Formats that stop a 30-45 GB 11-audio remux must be RELEASE-TITLE regexes:
+# at grab time Radarr has not downloaded the file, so every MediaInfo condition
+# (audio codec, video codec, channels) is unknown and matches nothing. They
+# also have to be scored on the profile - a format with a score of 0 does
+# nothing - and a profile PUT replaces the whole profile, so the write has to
+# be planned, backed up and read back.
+CHK_OK=1
+if [ -f "$SCRIPT_DIR/radarr_admin.sh" ] \
+   && grep -Fq 'ReleaseTitleSpecification' "$SCRIPT_DIR/radarr_admin.sh" \
+   && grep -Fq 'at grab time' "$SCRIPT_DIR/radarr_admin.sh" \
+   && grep -Fq 'MediaInfo' "$SCRIPT_DIR/radarr_admin.sh" \
+   && grep -Fq -- '--apply' "$SCRIPT_DIR/radarr_admin.sh"; then
+    pass "radarr_admin.sh scores release-title formats, and says why not MediaInfo"
+else
+    fail "fix 87: radarr_admin.sh missing, or a MediaInfo-based format would score nothing"
+    CHK_OK=0
+fi
+if python3 - "$SCRIPT_DIR/radarr_admin.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+# the write path: backup BEFORE the profile PUT, verify AFTER it, and nothing
+# written without --apply. A comment naming the step must not satisfy this.
+i_plan = src.find("if not APPLY:")
+i_backup = src.find("path = backup(prof)", i_plan) if i_plan >= 0 else -1
+i_put = (src.find('put("/api/v3/qualityprofile/%s" % prof.get("id"), body)',
+                  i_backup) if i_backup >= 0 else -1)
+i_verify = (src.find("read-back does not match the plan", i_put)
+            if i_put >= 0 else -1)
+sys.exit(0 if 0 <= i_plan < i_backup < i_put < i_verify else 1)
+PY
+then
+    pass "custom formats: plan gate -> backup -> PUT -> read-back, in that order"
+else
+    fail "fix 87: the profile write is not gated/backed up/verified in order"
+    CHK_OK=0
+fi
+if python3 - "$SCRIPT_DIR/radarr_admin.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+# `Bluray-1080p Remux` must stay ALLOWED: the three films in the library are
+# remuxes, and a disallowed quality makes Radarr call them unwanted and search
+# forever for a replacement it can never beat. The block on NEW remuxes is the
+# -10000 title score, not the quality list.
+sys.exit(0 if "Bluray-1080p Remux" in src.split("QUALITIES=", 1)[1].split("\n", 1)[0]
+         and "NO Remux" in src else 1)
+PY
+then
+    pass "the remux quality stays allowed; new remuxes are blocked by score only"
+else
+    fail "fix 87: the default quality list drops Remux (existing files would go unwanted)"
+    CHK_OK=0
+fi
+if [ -f "$SCRIPT_DIR/tests/test_radarr_cf.py" ] \
+   && grep -Fq 'no MediaInfo condition' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
+   && grep -Fq 'is not optional (202 is not proof)' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
+   && python3 "$SCRIPT_DIR/tests/test_radarr_cf.py" >/dev/null 2>&1; then
+    pass "offline suite pins title-only formats, idempotence, backup and read-back"
+else
+    fail "fix 87: tests/test_radarr_cf.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
+    if grep -Fq 'FIX 87' "$MEMORY" \
+       && grep -Fq 'radarr_admin.sh --custom-formats' "$MANUAL" \
+       && grep -Fq 'Bluray-1080p Remux' "$MANUAL"; then
+        pass "PROJECT_MEMORY and the manual record the format scores and the remux trap"
+    else
+        fail "fix 87 is not in PROJECT_MEMORY / the runbook"
+        CHK_OK=0
+    fi
+else
+    note "docs absent next to the guardrail — fix 87 doc checks skipped"
+fi
+[ "$CHK_OK" -eq 1 ] && pass "G37 complete: fix 87 present"
+
+# ======================================================================
 echo
 echo "=============================================================="
 echo "=== Phase 5 guardrail test complete ==="

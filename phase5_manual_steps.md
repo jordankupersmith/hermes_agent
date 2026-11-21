@@ -2014,20 +2014,49 @@ you see 426 again, check the image tag before touching the provider settings.
    Profile*.
 
 **Radarr — refuse the bad releases at the source** (the normalizer is the
-safety net, not the first line of defence). *Settings → Custom Formats* → *Add*:
+safety net, not the first line of defence). Scripted, because the GUI version of
+this is six *Settings → Custom Formats* forms whose **condition type** matters
+more than their scores:
 
-| Custom Format | Condition | Score |
+```bash
+sudo bash radarr_admin.sh --custom-formats                # plan only
+sudo bash radarr_admin.sh --custom-formats --apply        # create + score
+sudo bash radarr_admin.sh --quality-profile               # plan only
+sudo bash radarr_admin.sh --quality-profile --apply       # restrict qualities
+```
+
+| Custom Format | Condition (release title regex) | Score |
 | --- | --- | --- |
-| `TrueHD / Atmos` | Release title contains `TrueHD` OR `Atmos` | **-10000** |
-| `DTS-HD / DTS-X` | contains `DTS-HD` OR `DTS-X` | **-10000** |
-| `Remux` | contains `Remux` | **-10000** |
-| `MULTi / DUAL` | contains `MULTi` OR `DUAL` | **-10000** |
-| `H.264` | contains `x264` OR `H.264` | **+50** |
-| `AC3 5.1` | contains `AC3` OR `DD5.1` | **+25** |
+| `NO TrueHD / Atmos` | `(?i)(truehd\|atmos)` | **-10000** |
+| `NO DTS-HD / DTS-X` | `(?i)(dts[-. ]?hd\|dts[-. ]?x)` | **-10000** |
+| `NO Remux` | `(?i)remux` | **-10000** |
+| `NO MULTi / DUAL` | `(?i)\b(multi\|dual)\b` | **-10000** |
+| `PREF H.264` | `(?i)(x264\|h[. ]?264)` | **+50** |
+| `PREF AC3` | `(?i)(\bac3\b\|\bdd5[. ]?1\b)` | **+25** |
 
-Then in the quality profile, allow only `WEBDL-1080p` / `Bluray-1080p` (drop
-`Remux` and `2160p`) and attach those custom formats. Scores of -10000 make a
-release effectively ungrabbable, so you stop paying for 11-audio remuxes at all.
+**The condition type is the whole trick (fix 87).** Every one of those must be
+**Release Title**, not MediaInfo *Audio Codec* / *Video Codec*: at grab time
+Radarr has not downloaded the file, so a MediaInfo condition is unknown and
+matches nothing. A custom format built from MediaInfo can only score a file
+that already exists — it can never stop the 30-45 GB download that the
+normalizer would then have to rewrite. That is why the table above is regexes.
+
+**Do not drop `Bluray-1080p Remux` from the quality profile.** The three films
+already in the library *are* remuxes (`Project Hail Mary … Remux-1080p`). A
+quality that is no longer allowed makes Radarr treat those files as unwanted
+and search for a replacement it can never beat (Remux is the top quality), so
+the library would churn forever. The script keeps it allowed and blocks *new*
+remuxes with the -10000 title score instead — same outcome, no churn.
+
+The default allowed set is therefore `WEBDL-1080p`, `Bluray-1080p` and
+`Bluray-1080p Remux`, with the cutoff on `Bluray-1080p`; every 2160p quality is
+disallowed. Scores of -10000 sit below `minFormatScore=0`, so a matching
+release is rejected outright rather than merely ranked lower.
+
+Safety: every write is printed first, `--apply` is required, the profile is
+copied to `/var/backups/phase5/radarr-qualityprofile-<id>-<ts>.json` (0600)
+before the PUT, and the result is read back (a 202 is not proof — fix 84).
+`sudo bash radarr_admin.sh --restore <that file> --apply` puts it back.
 
 **Verification.** `diag` section **S11** fails if either unit is not active and
 prints the newest library file's stream counts (`audio=1 subs=0` is the target).

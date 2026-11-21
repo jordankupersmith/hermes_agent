@@ -312,11 +312,18 @@ stream — but it is no longer the blocker.
       `Spanish (Latino)` + `Spanish` enabled, profile `id=1`, providers
       `opensubtitlescom` + `subf2m` both `Good`, embedded subs stripped by the
       normalizer so every new title is a fresh fetch.
-- [ ] **Radarr Custom Formats** (manual 10i): `-10000` for `TrueHD`/`Atmos`,
-      `DTS-HD`/`DTS-X`, `Remux`, `MULTi`/`DUAL`; `+50` H.264, `+25` AC3. This
-      stops paying for 11-audio remuxes in the first place. Allow only
-      `WEBDL-1080p` / `Bluray-1080p` in the quality profile.
-- [x] **Client side — ROOT CAUSE FOUND (fix 58, 2026-11-18):** the sideloaded
+- [x] **Radarr Custom Formats (fix 87, scripted 2026-11-21)** —
+      `radarr_admin.sh --custom-formats` / `--quality-profile` (plan first,
+      `--apply` to write, backup + read-back). Six **release-title** regexes:
+      `-10000` for TrueHD/Atmos, DTS-HD/DTS-X, Remux, MULTi/DUAL; `+50` H.264,
+      `+25` AC3. A MediaInfo condition would be **unknown at grab time** and
+      could never block the download, which is the whole point.
+      Profile keeps `Bluray-1080p Remux` **allowed** (the existing three films
+      are remuxes; an unallowed quality makes Radarr call them unwanted and
+      search forever) and drops every 2160p.
+      **Still to run:** `sudo bash radarr_admin.sh --custom-formats --apply`
+      then `--quality-profile --apply`; verify with `--status`.
+- [ ] **Client side — ROOT CAUSE FOUND (fix 58, 2026-11-18):** the sideloaded
       build reports `Jellyfin for Tizen 0.1.0 compiled 2026/11/06 @ 00h56 with
       Jellyfin-12.z` (jellyfin-web 12.z) while the stack was pinned to server
       `10.10.6`. The library renders (API works) and **every** play request dies
