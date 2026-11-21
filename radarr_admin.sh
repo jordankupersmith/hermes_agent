@@ -475,11 +475,13 @@ if MODE == "quality-profile":
 
     before = allowed_names(prof)
     after_plan = [q.get("name") for q in want.values()]
+    remux = next((q.get("name") for q in want.values()
+                  if str(q.get("name")).lower() in QUALITY_ALIASES["remux-1080p"]), None)
     print("  allowed: %s" % (", ".join(before) or "(none)"))
     print("  ->       %s" % ", ".join(after_plan))
     print("  cutoff : %s -> %s" % (prof.get("cutoff"), cutoff_hit[0].get("id")))
-    if set(before) != set(after_plan):
-        print("  note: files already on disk keep their quality. `Bluray-1080p Remux`")
+    if remux and set(before) != set(after_plan):
+        print("  note: files already on disk keep their quality. `%s`" % remux)
         print("        stays allowed so the existing remuxes are not marked unwanted;")
         print("        new remuxes are blocked by the -10000 title score instead.")
 
