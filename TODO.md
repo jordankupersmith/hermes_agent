@@ -335,6 +335,10 @@ stream — but it is no longer the blocker.
       `/var/backups/phase5/radarr-qualityprofile-4-20261121T102928Z.json`
       (fix 87c: the second apply reused that name, so it holds the post-CF
       profile — a revert is `--restore` **plus** deleting the six formats).
+      **Rule-3 chain done 2026-11-21 10:44Z:** `phase5_step1_install.sh`
+      (canonical copies match), `phase5_apply.sh` → `VERIFY_FAILS=0`,
+      `phase5_diag.sh` → `VERIFY_FAILS=0` (qBittorrent's restart is the VPN
+      profile being re-created, not a fault).
       **Deferred on purpose (owner, 2026-11-21):** proving that a *new* search
       rejects a remux is not worth a forced search now. The scores are verified
       by the script's read-back, which is the failure mode that is silent; when
