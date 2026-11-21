@@ -2159,8 +2159,10 @@ recompute):
 sudo bash bazarr_status.sh --rescan "hail mary"
 ```
 
-`missing: es.hi` then remains, exactly as on the other two films — the last row
-is a last resort and retries every 6 h harmlessly.
+`missing: ea, es.hi` then remains, as on the other two films — the last row is a
+last resort and retries every 6 h harmlessly. `ea` is missing **permanently** and
+that is correct (see the paragraph below): the row cannot be matched by a search
+and deleting it would stop a `.es-MX.srt` counting as *best*.
 
 Two candidate-list traps worth knowing before re-picking anything. A LatAm search
 **cannot** match OpenSubtitles' LatAm files: `download_best_subtitles()` filters

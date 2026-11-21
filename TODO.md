@@ -124,27 +124,28 @@ Details: manual **Step 10** (10a–10i).
 - [x] **3-row profile applied** (`ea, es, es.hi`, cutoff on `es.hi`).
 - [x] **PHM's LatAm-HI file removed** (Jellyfin read it as Hindi).
 - [x] **PHM recompute (fix 84)** — `--rescan` now syncs, scans and recomputes.
-- [ ] **Root cause found (fix 85): Bazarr trusted Radarr's import-time language list.**
+- [x] **Root cause found (fix 85): Bazarr trusted Radarr's import-time language list.**
       Bazarr's `audio_language` came from `movieFile.languages`, which still
       named Spanish/French/German/... after the normalizer left one English
       track, and `audio_exclude=True` then dropped every Spanish row — so
       `missing_subtitles` was `[]` and the search job exited in 0.13 s.
-      Run `sudo bash phase5_step1_install.sh` then
-      `sudo bash bazarr_status.sh --fix-audio-source` (one flat setting:
-      `settings-general-parse_embedded_audio_track=true`; Bazarr then ffprobes
-      the file's audio and rebuilds every movie's missing list). Expect PHM to
-      show `missing=ea, es, es.hi`; then `--search 1`, `--rescan 1`,
-      `jellyfin_admin.sh --scan`, `--subs`.
-- [ ] **PHM's subtitle is plain Castilian, mislabelled `.hi` (fix 86).** The
+      **Done 2026-11-21:** `--fix-audio-source` live (`parse_embedded_audio_track=True`),
+      PHM's list rebuilt to `ea, es, es.hi`, and the search then downloaded one.
+- [x] **PHM's subtitle is plain Castilian, mislabelled `.hi` (fix 86).** The
       text has 1 HI-regex hit in 2445 cues (the year in the title card), so
-      Bazarr named it `.es.hi.srt` and Jellyfin shows *HI Spanish*. Rename it to
-      `.es.srt` beside the film, then `bazarr_status.sh --rescan 1`,
-      `jellyfin_admin.sh --scan`, `--subs` → expect plain *Spanish* and no
-      `hin`/`HI` line.
-- [ ] **`missing: es.hi` on Ferris/Breakfast is expected, not a fault.** The
-      HI row is the last-resort row and the providers have no HI match for these
-      releases; the non-HI rows (which the TV uses) are present. Bazarr will
-      retry it every 6 h harmlessly.
+      Bazarr named it `.es.hi.srt` and Jellyfin showed *HI Spanish*.
+      **Done 2026-11-21:** renamed to `.es.srt`, `--rescan 1`, `--scan`, `--subs`
+      → `spa external Spanish`, no `HI`, no `hin`. All three films now carry a
+      plain non-HI Spanish track.
+- [ ] **`missing: ea, es.hi` is expected on all three films, not a fault.**
+      The `es.hi` row is the last resort and the providers have no HI match for
+      these releases; the `ea` row can never be matched at all
+      (`Subliminal` filters on `language.basename`, `spl` vs `es-MX`, fix 86), so
+      it stays missing until a Castilian search happens to return an MX-tagged
+      file — which is how Ferris/Breakfast got theirs. Bazarr retries both every
+      6 h harmlessly. **Do not delete the `ea` row** to silence it: it is what
+      ranks a `.es-MX.srt` as *best*, and dropping rows risks the LatAm sidecar
+      being treated as unwanted.
 - [ ] **Re-install + diag to verify fix 79 live**: `phase5_step1_install.sh`
       then `phase5_diag.sh`; S11 must print audio/subs **and languages** for the
       newest file with no `audio=?`.
