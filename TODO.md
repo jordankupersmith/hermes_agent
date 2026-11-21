@@ -318,11 +318,16 @@ stream — but it is no longer the blocker.
       `-10000` for TrueHD/Atmos, DTS-HD/DTS-X, Remux, MULTi/DUAL; `+50` H.264,
       `+25` AC3. A MediaInfo condition would be **unknown at grab time** and
       could never block the download, which is the whole point.
-      Profile keeps `Bluray-1080p Remux` **allowed** (the existing three films
-      are remuxes; an unallowed quality makes Radarr call them unwanted and
-      search forever) and drops every 2160p.
-      **Still to run:** `sudo bash radarr_admin.sh --custom-formats --apply`
-      then `--quality-profile --apply`; verify with `--status`.
+      **Live facts (2026-11-21, Radarr 5.20.2.9777):** six stock profiles
+      (`Any`, `SD`, `HD-720p`, `HD-1080p`, `Ultra-HD`, `HD - 720p/1080p`), 0
+      custom formats, and the remux tier is spelled **`Remux-1080p`**. The
+      script now reads the target profile from `/api/v3/movie` instead of
+      guessing, and resolves the remux slot in either spelling (fix 87b).
+      **Still to run:** `sudo bash radarr_admin.sh --status` to see which
+      profile the three films are on, then `--custom-formats --apply` and
+      `--quality-profile --apply` (add `--profile <id>` only if the films are
+      split). Keep the remux tier allowed — owner ruling 2026-11-21: the
+      Breakfast Club picture was good, and `upgradeAllowed=False` everywhere.
 - [ ] **Client side — ROOT CAUSE FOUND (fix 58, 2026-11-18):** the sideloaded
       build reports `Jellyfin for Tizen 0.1.0 compiled 2026/11/06 @ 00h56 with
       Jellyfin-12.z` (jellyfin-web 12.z) while the stack was pinned to server

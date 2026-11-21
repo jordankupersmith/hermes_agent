@@ -54,12 +54,17 @@ def schema(impls=("ReleaseTitleSpecification", "AudioCodecSpecification")):
     return out
 
 
-def profile(allowed=None, format_items=None):
+def profile(allowed=None, format_items=None, remux_520=False):
     allowed = allowed if allowed is not None else [
         "WEBDL-1080p", "Bluray-1080p", "Bluray-1080p Remux",
         "WEBDL-2160p", "Bluray-2160p"]
     quals = {"WEBDL-1080p": 3, "Bluray-1080p": 7, "Bluray-1080p Remux": 9,
              "WEBDL-2160p": 19, "Bluray-2160p": 18}
+    if remux_520:                      # Radarr 5.20 renamed the remux quality
+        quals = {("Remux-1080p" if n == "Bluray-1080p Remux" else n): v
+                 for n, v in quals.items()}
+        allowed = [("Remux-1080p" if n == "Bluray-1080p Remux" else n)
+                   for n in allowed]
     return {
         "id": 1, "name": "HD-1080p", "upgradeAllowed": True, "cutoff": 7,
         "minFormatScore": 0, "cutoffFormatScore": 0,
@@ -71,12 +76,16 @@ def profile(allowed=None, format_items=None):
 
 class State:
     def __init__(self, impls=("ReleaseTitleSpecification", "AudioCodecSpecification"),
-                 existing_cfs=None, store_scores=True):
+                 existing_cfs=None, store_scores=True, movies=3, remux_520=False,
+                 extra_profile=None):
         self.impls = impls
         self.cfs = list(existing_cfs or [])
         self.next_id = 100
-        self.prof = profile()
+        self.prof = profile(remux_520=remux_520)
         self.store_scores = store_scores
+        # Radarr ships six default profiles; a fresh install is never "one".
+        self.extra = [extra_profile] if extra_profile else []
+        self.movies = [{"qualityProfileId": 1} for _ in range(movies)]
         self.posts = []
         self.puts = []
         self.keys = []
@@ -112,7 +121,9 @@ def serve(state):
             elif p == "/api/v3/customformat":
                 self._send(state.cfs)
             elif p == "/api/v3/qualityprofile":
-                self._send([state.prof])
+                self._send([state.prof] + state.extra)
+            elif p == "/api/v3/movie":
+                self._send(state.movies)
             else:
                 self._send({}, 404)
 
@@ -137,10 +148,16 @@ def serve(state):
                 self._send(body, 202)
             elif p.startswith("/api/v3/qualityprofile/"):
                 state.puts.append(("profile", body))
-                if state.store_scores:
+                pid = p.rsplit("/", 1)[1]
+                if not state.store_scores:     # accepts 202, stores nothing
+                    self._send(body, 202)
+                    return
+                if str(state.prof["id"]) == pid:
                     state.prof = body
-                else:                      # accepts 202, stores nothing
-                    state.prof = profile()
+                else:
+                    for i, x in enumerate(state.extra):
+                        if str(x["id"]) == pid:
+                            state.extra[i] = body
                 self._send(body, 202)
             else:
                 self._send({}, 404)
@@ -306,6 +323,47 @@ check("exits 0", r.returncode == 0, r.stderr[:300])
 check("the outer quality is disallowed too",
       not any(i["allowed"] for i in st.prof["items"]
               if (i.get("quality") or {}).get("name") == "Bluray-1080p Group"))
+
+print("== the profile is read from the library, not guessed (fix 87b) ==")
+st = State()
+r = run(st, "status")
+check("exits 0", r.returncode == 0, r.stderr[:300])
+check("says how many movies are on which profile",
+      "3 movie(s) on profile id=1" in r.stdout, r.stdout[-400:])
+
+print("== Radarr 5.20 spells the remux quality 'Remux-1080p' ==")
+st = State(remux_520=True)
+r = run(st, "quality-profile", apply=1, backup_dir=tempfile.mkdtemp())
+check("exits 0 on the new vocabulary", r.returncode == 0, r.stderr[:300])
+allowed = {i["quality"]["name"] for i in st.prof["items"] if i["allowed"]}
+check("the remux slot resolves to Remux-1080p",
+      allowed == {"WEBDL-1080p", "Bluray-1080p", "Remux-1080p"}, repr(allowed))
+check("cutoff still lands on Bluray-1080p",
+      any(i["quality"]["id"] == st.prof["cutoff"] and i["allowed"]
+          for i in st.prof["items"]), repr(st.prof["cutoff"]))
+
+print("== a library split across two profiles is refused, not guessed ==")
+st = State()
+p2 = profile()
+p2.update(id=2, name="Ultra-HD")
+st.extra.append(p2)
+st.movies.append({"qualityProfileId": 2})
+r = run(st, "quality-profile", apply=1)
+check("exits 2", r.returncode == 2, "rc=%s" % r.returncode)
+check("names both profiles and their counts",
+      "library uses 2 quality profiles" in r.stderr and "x3" in r.stderr,
+      r.stderr[:300])
+check("wrote nothing", not st.puts)
+
+print("== no movies and several profiles: still refused ==")
+st = State(movies=0)
+p2 = profile()
+p2.update(id=2, name="Ultra-HD")
+st.extra.append(p2)
+r = run(st, "quality-profile", apply=1)
+check("exits 2", r.returncode == 2, "rc=%s" % r.returncode)
+check("says there is nothing to infer from", "no movies yet" in r.stderr,
+      r.stderr[:300])
 
 print("\n%d failure(s)" % fails)
 sys.exit(1 if fails else 0)

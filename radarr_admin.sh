@@ -42,7 +42,7 @@ BACKUP_DIR="${BACKUP_DIR:-/var/backups/phase5}"
 MODE=status
 APPLY=0
 PROFILE=""
-QUALITIES="${QUALITIES:-WEBDL-1080p,Bluray-1080p,Bluray-1080p Remux}"
+QUALITIES="${QUALITIES:-WEBDL-1080p,Bluray-1080p,Remux-1080p}"
 CUTOFF="${CUTOFF:-Bluray-1080p}"
 RESTORE=""
 
@@ -55,8 +55,9 @@ usage: sudo bash radarr_admin.sh [--status]
        sudo bash radarr_admin.sh --restore <backup.json> --apply
 
   --apply     write. Without it every command only prints the plan.
-  --profile   default: the only quality profile, or an error if there are several.
-  --qualities default: WEBDL-1080p,Bluray-1080p,Bluray-1080p Remux
+  --profile   default: the quality profile the library's movies use, or an error
+              if they disagree (so the scores land where the films actually are).
+  --qualities default: WEBDL-1080p,Bluray-1080p,Remux-1080p
   --cutoff    default: Bluray-1080p
 USAGE
 }
@@ -165,6 +166,20 @@ def profiles():
     return p
 
 
+def movie_profile_counts():
+    """Which profile the films are actually on. Radarr ships six defaults, so
+    this is the only reliable way to know where the scores have to land."""
+    code, ms = call("/api/v3/movie")
+    if code != 200 or not isinstance(ms, list):
+        return {}
+    counts = {}
+    for m in ms:
+        pid = m.get("qualityProfileId")
+        if pid is not None:
+            counts[str(pid)] = counts.get(str(pid), 0) + 1
+    return counts
+
+
 def profile_by_id(pid):
     for p in profiles():
         if str(p.get("id")) == str(pid):
@@ -172,7 +187,9 @@ def profile_by_id(pid):
     die("profile id=%s disappeared after the write" % pid, 5)
 
 
-def pick(ps):
+def pick(ps, used):
+    """The profile that matters is the one the films are on — Radarr ships six
+    default profiles, so "the only profile" is never true on a fresh install."""
     if WANT_PROFILE:
         for p in ps:
             if str(p.get("id")) == WANT_PROFILE or \
@@ -181,10 +198,20 @@ def pick(ps):
         die("no quality profile matching %r — available: %s"
             % (WANT_PROFILE, ", ".join("%s(id=%s)" % (p.get("name"), p.get("id"))
                                        for p in ps)), 2)
-    if len(ps) == 1:
-        return ps[0]
-    die("Radarr has %d quality profiles; choose one with --profile <id|name>: %s"
-        % (len(ps), ", ".join("%s(id=%s)" % (p.get("name"), p.get("id")) for p in ps)), 2)
+    if len(used) == 1:
+        pid = next(iter(used))
+        for p in ps:
+            if str(p.get("id")) == str(pid):
+                return p
+        die("the movies point at quality profile id=%s, which Radarr does not return"
+            % pid, 2)
+    if not used:
+        if len(ps) == 1:
+            return ps[0]
+        die("no movies yet and %d quality profiles; choose one with --profile <id|name>: %s"
+            % (len(ps), ", ".join("%s(id=%s)" % (p.get("name"), p.get("id")) for p in ps)), 2)
+    die("the library uses %d quality profiles (%s); choose one with --profile <id|name>"
+        % (len(used), ", ".join("id=%s x%d" % (i, n) for i, n in sorted(used.items()))), 2)
 
 
 def walk(items):
@@ -211,14 +238,40 @@ def all_quality_names(prof):
     return [q.get("name") for _, q in quality_nodes(prof)]
 
 
+# Radarr renamed the remux quality: 5.20 calls it `Remux-1080p`, older builds
+# `Bluray-1080p Remux`. Both mean the same tier, and the *reason* we keep it
+# allowed is unchanged, so resolve the slot instead of demanding one spelling.
+QUALITY_ALIASES = {
+    "remux-1080p": {"remux-1080p", "bluray-1080p remux"},
+    "bluray-1080p remux": {"remux-1080p", "bluray-1080p remux"},
+    "webdl-1080p": {"webdl-1080p", "webl-1080p"},
+    "webl-1080p": {"webdl-1080p", "webl-1080p"},
+}
+
+
+def resolve_quality(have, want):
+    group = QUALITY_ALIASES.get(want.lower(), {want.lower()})
+    for name_lc, q in have.items():
+        if name_lc in group:
+            return q
+    return None
+
+
 def want_quality_ids(prof):
     have = {str(q["name"]).lower(): q for _, q in quality_nodes(prof)}
-    missing = [n for n in QUALITIES if n.lower() not in have]
+    out = {}
+    missing = []
+    for want in QUALITIES:
+        q = resolve_quality(have, want)
+        if q is None:
+            missing.append(want)
+        else:
+            out[str(q["name"]).lower()] = q
     if missing:
         die("this Radarr has no quality named %s — it offers: %s"
             % (", ".join(repr(m) for m in missing),
                ", ".join(all_quality_names(prof))), 4)
-    return {n.lower(): have[n.lower()] for n in QUALITIES}
+    return out
 
 
 def spec_body(item):
@@ -286,10 +339,19 @@ for item in CFS:
     print("  %-18s %-9s %s" % (item["name"], "present" if have else "MISSING",
                                "score %+d" % item["score"]))
 
+used = movie_profile_counts()
+names_by_id = {str(p.get("id")): p.get("name") for p in ps}
+print("== library ==")
+if used:
+    for pid, n in sorted(used.items()):
+        print("  %d movie(s) on profile id=%s %r" % (n, pid, names_by_id.get(pid, "?")))
+else:
+    print("  no movies yet — the profile cannot be inferred from the library")
+
 if MODE == "status":
     sys.exit(0)
 
-prof = pick(ps)
+prof = pick(ps, used)
 print("== profile %r (id=%s) ==" % (prof.get("name"), prof.get("id")))
 
 # ------------------------------------------------------------------- restore
@@ -405,7 +467,9 @@ if MODE == "custom-formats":
 # -------------------------------------------------------------- quality profile
 if MODE == "quality-profile":
     want = want_quality_ids(prof)
-    cutoff_hit = [q for q in want.values() if str(q.get("name")).lower() == CUTOFF.lower()]
+    cutoff_group = QUALITY_ALIASES.get(CUTOFF.lower(), {CUTOFF.lower()})
+    cutoff_hit = [q for q in want.values()
+                  if str(q.get("name")).lower() in cutoff_group]
     if not cutoff_hit:
         die("cutoff %r is not in --qualities %s" % (CUTOFF, ", ".join(QUALITIES)), 4)
 

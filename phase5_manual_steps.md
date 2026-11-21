@@ -2041,17 +2041,37 @@ matches nothing. A custom format built from MediaInfo can only score a file
 that already exists — it can never stop the 30-45 GB download that the
 normalizer would then have to rewrite. That is why the table above is regexes.
 
-**Do not drop `Bluray-1080p Remux` from the quality profile.** The three films
-already in the library *are* remuxes (`Project Hail Mary … Remux-1080p`). A
-quality that is no longer allowed makes Radarr treat those files as unwanted
-and search for a replacement it can never beat (Remux is the top quality), so
-the library would churn forever. The script keeps it allowed and blocks *new*
-remuxes with the -10000 title score instead — same outcome, no churn.
+**Which profile does it score?** The one the films are on — Radarr 5.20 ships
+**six** default profiles (`Any`, `SD`, `HD-720p`, `HD-1080p`, `Ultra-HD`,
+`HD - 720p/1080p`), so "the only profile" is never true on a fresh install. The
+script reads `/api/v3/movie`, and:
 
-The default allowed set is therefore `WEBDL-1080p`, `Bluray-1080p` and
-`Bluray-1080p Remux`, with the cutoff on `Bluray-1080p`; every 2160p quality is
+- all films on one profile → that profile (this is the normal case);
+- films spread over several profiles → it stops and names them, `--profile`
+  decides (`--profile 4`, or `--profile 'HD-1080p'`);
+- no films yet → also stops, because there is nothing to infer from.
+
+`--status` prints the split explicitly, e.g.
+`3 movie(s) on profile id=4 'HD-1080p'`.
+
+**Do not drop the remux quality.** The three films already in the library *are*
+remuxes, and the owner confirmed the picture is good, so that tier stays
+allowed. Radarr 5.20 spells it **`Remux-1080p`**; older builds said
+`Bluray-1080p Remux` — the script accepts either and resolves the slot, so the
+same command works on both. A quality that is no longer allowed makes Radarr
+treat those files as unwanted and search for a replacement it can never beat
+(Remux is the top quality), so the library would churn forever. New remuxes are
+blocked by the -10000 title score instead — same defence, no churn.
+
+The default allowed set is therefore `WEBDL-1080p`, `Bluray-1080p` and the
+remux tier, with the cutoff on `Bluray-1080p`; every 2160p quality is
 disallowed. Scores of -10000 sit below `minFormatScore=0`, so a matching
 release is rejected outright rather than merely ranked lower.
+
+**On `Any`.** That profile allows `WORKPRINT, CAM, TELESYNC, TELECINE, REGIONAL,
+DVDSCR, …` as well as 2160p. If the films happen to be on it, restricting it to
+the three 1080p tiers is the single biggest quality gain in this section; the
+script will say so in `--status` rather than assume it.
 
 Safety: every write is printed first, `--apply` is required, the profile is
 copied to `/var/backups/phase5/radarr-qualityprofile-<id>-<ts>.json` (0600)

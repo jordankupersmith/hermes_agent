@@ -2450,15 +2450,16 @@ fi
 if python3 - "$SCRIPT_DIR/radarr_admin.sh" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-# `Bluray-1080p Remux` must stay ALLOWED: the three films in the library are
-# remuxes, and a disallowed quality makes Radarr call them unwanted and search
-# forever for a replacement it can never beat. The block on NEW remuxes is the
-# -10000 title score, not the quality list.
-sys.exit(0 if "Bluray-1080p Remux" in src.split("QUALITIES=", 1)[1].split("\n", 1)[0]
-         and "NO Remux" in src else 1)
+# `Remux-1080p` (5.20) / `Bluray-1080p Remux` (older) must stay ALLOWED: the
+# films in the library are remuxes, and a disallowed quality makes Radarr call
+# them unwanted and search forever for a replacement it can never beat. The
+# block on NEW remuxes is the -10000 title score, not the quality list.
+default = src.split("QUALITIES=", 1)[1].split("\n", 1)[0]
+sys.exit(0 if "Remux" in default and "NO Remux" in src
+         and "Remux-1080p" in src and "Bluray-1080p Remux" in src else 1)
 PY
 then
-    pass "the remux quality stays allowed; new remuxes are blocked by score only"
+    pass "the remux quality stays allowed in both spellings; new remuxes are scored out"
 else
     fail "fix 87: the default quality list drops Remux (existing files would go unwanted)"
     CHK_OK=0
@@ -2466,10 +2467,22 @@ fi
 if [ -f "$SCRIPT_DIR/tests/test_radarr_cf.py" ] \
    && grep -Fq 'no MediaInfo condition' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
    && grep -Fq 'is not optional (202 is not proof)' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
+   && grep -Fq 'the profile is read from the library' "$SCRIPT_DIR/tests/test_radarr_cf.py" \
    && python3 "$SCRIPT_DIR/tests/test_radarr_cf.py" >/dev/null 2>&1; then
     pass "offline suite pins title-only formats, idempotence, backup and read-back"
 else
     fail "fix 87: tests/test_radarr_cf.py missing, gutted, or failing"
+    CHK_OK=0
+fi
+# Radarr ships six default profiles (Any/SD/HD-720p/HD-1080p/Ultra-HD/HD-720p+1080p),
+# so "the only profile" is never true on a fresh install: the one to score is the
+# one the films are on, and disagreement must be an error rather than a guess.
+if grep -Fq '/api/v3/movie' "$SCRIPT_DIR/radarr_admin.sh" \
+   && grep -Fq 'the library uses' "$SCRIPT_DIR/radarr_admin.sh" \
+   && grep -Fq 'no movies yet' "$SCRIPT_DIR/radarr_admin.sh"; then
+    pass "the profile to score is the one the library uses; disagreement is an error"
+else
+    fail "fix 87: the target profile is guessed instead of read from the library"
     CHK_OK=0
 fi
 if [ -f "$MANUAL" ] && [ -f "$MEMORY" ]; then
