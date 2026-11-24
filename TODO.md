@@ -21,37 +21,34 @@ Details: manual **Step 10** (10a–10i).
 - [x] **Apply fix 58 — DONE 2026-11-18 16:31Z** (`apply VERIFY_FAILS=0`,
       `diag VERIFY_FAILS=0`): backup `jellyfin-backup-20261118T163106Z-pre-10.10.6.tar.gz`
       (14M), stepped `10.10.7 → 12.4`, V6 `12.4 image` + `12.4.0`, S5 `12.4.0`.
-- [ ] **After the 12.4 upgrade (manual 10h):** run *Dashboard → Scheduled Tasks →
-      **Scan Media Library*** (**mandatory** — 12.0 drops auto-resolved
-      alternative versions), then press **Play on the TV**. Populate the 10e
-      client table with the `.wgt` version once playback is confirmed.
-      Scripted: `sudo bash jellyfin_admin.sh --scan` (manual 10j).
-- [ ] **Rename the server** — `/System/Configuration` has `ServerName` **empty**
-      (observed 2026-11-19), and the *public* endpoint then falls back to the
-      machine hostname, which in a container is the id (`a45dba6c517e`) and
-      changes on every recreate.
-      `sudo bash jellyfin_admin.sh --server-name "Family Media"` (manual 10j),
-      or *Dashboard → General → Server Name*.
-- [ ] **Re-check Jellyseerr on 12.4:** sign in at `https://192.168.1.133:8443`,
-      confirm the Jellyfin connection and one request still work.
-- [ ] **Prowlarr → Radarr sync** (see below), qBt password, categories,
-      end-to-end hardlink proof, family-facing items.
+- [x] **After the 12.4 upgrade (manual 10h):** scan run 2026-11-24 (`jellyfin_admin.sh --scan` → HTTP 204, state Idle), TV playback confirmed on 12.1.wgt, `.wgt` version recorded.
+- [x] **Rename the server** — done: `ServerName` = "Family Media" (diag S5).
+- [x] **Re-check Jellyseerr on 12.4:** works (user-confirmed 2026-11-24).
+- [x] **Family-facing (10e):** done — CA import, Jellyfin users, Jellyseerr user import + permissions, TV + Music libraries, TV playback on 12.1.wgt verified.
 
-- [ ] **Finish Prowlarr → Radarr sync.** Last error: `Unable to complete
+- [x] **Finish Prowlarr → Radarr sync.** Done 2026-11-24 (inferred from the three
+      successful grabs through Radarr; indexer count not separately verified, but
+      search + download worked for all three films).
       application test, cannot connect to Radarr. Connection refused
       (localhost:7878)` → the *Radarr Server* field still holds the pre-filled
       default. Set Prowlarr Server `http://prowlarr:9696`, Radarr Server
       `http://radarr:7878`, Radarr API key, Sync Level `Full Sync` → Test → Save.
       Expect: `api/v1/applications` shows `"implementation":"Radarr"` +
       `"syncLevel":"fullSync"`, and Radarr's indexer count becomes `1` (YTS).
-- [ ] **qBittorrent WebUI password** permanently set (10b), then the same
+- [x] **qBittorrent WebUI password** permanently set (10b) — diag S9 PASSes the
+      600 root-only store; apply recreates the container but the password lives
+      in the config, so it survives.
       credentials in Radarr's download client.
       **Scripted (fix 71, 2026-11-20):** `sudo bash qbt_admin.sh --set-password`
       — one atomic run (set + fresh-login proof + 600 root-only store + Radarr
       PUT + ban-clearing restart + `testall`). Needed because qBittorrent's
       temporary password is **regenerated on every container start**, so each
       apply re-created the "Authentication Failure" incident.
-- [ ] **qBt category** `radarr` → `/data/torrents/movies` **and** the manual-mode
+- [x] **qBt category** `radarr` → `/data/torrents/movies` **and** the manual-mode
+      path switch (10c). On-disk gate passed 2026-11-24: `savePath=/data/torrents/movies`,
+      `UseCategoryPathsInManualMode=true` on disk. Functional proof (next grab lands
+      in `/data/torrents/movies/`) is still pending — that's the passive first-real-grab
+      test.
       path switch (10c).
       **Confirmed 2026-11-19:** the category exists but its `savePath` is
       **empty**, and Radarr already tags the torrent `cat=radarr` — so the name
@@ -92,15 +89,10 @@ Details: manual **Step 10** (10a–10i).
 - [x] **Both titles imported (2026-11-20 10:33Z / later).** *The Breakfast Club*
       `hasFile True`, `downloadFolderImported 10:33Z`, Jellyfin sees it as 97 min;
       *Ferris Bueller's Day Off* at 100% and importing. Verdict **YES**.
-- [ ] **Reclaim the pre-remux copies (do this — it is the last step of the flow).**
-      `copyUsingHardlinks` was **already True**; the 41 G -> 61 G jump is the
-      fix-59 remux replacing the library inode (its own log shows `remux:`/`done:`
-      for both titles), so each title legitimately exists twice until its torrent
-      is removed. Remove both completed torrents to return ~14.8 GiB, then
-      `--status` should read ~46 G used / 43 G free:
-      `qbt_admin.sh --remove-torrent "breakfast club" --yes` and the same for
-      `ferris`. Worth a sentence in the report: the hardlink is what keeps the
-      *remux peak* at 2 copies instead of 3.
+- [x] **Reclaim the pre-remux copies (done — 2026-11-24).** `/data` is 46 G used / 38 G free,
+      matching the library-only size (~45 G for the three remuxes + config), so the
+      duplicated torrent inodes are gone. `qbt_admin.sh --remove-torrent` is still
+      the correct tool if a future reclaim is needed; `--status` confirms it.
 - [ ] **Subtitle policy reversed (fix 78) — new titles keep their Spanish subs.**
       Owner decision 2026-11-20: embedded `spa`/`es`/`es-XX` subtitle tracks are
       KEPT (a possibly-Castilian track beats none); every other language is still
@@ -374,7 +366,19 @@ stream — but it is no longer the blocker.
       still fails, capture the wire with `diagnose_tv_playback.sh` before
       changing anything else — do **not** re-pin the server backwards.
 
-## P3 — later / optional (no household impact)
+## P4 — request workflow (Jellyseerr/Seerr)
+
+- [ ] **Partial series requests for South Park (and ongoing shows).** User wants only
+      the latest season now, then individual episodes as they air — not the whole
+      series. Seerr/Jellyseerr supports this:
+      - `Settings → General → Allow Partial Series Requests` must be ON (default).
+      - In the request dialog, tick only the desired season(s)/episode(s) before
+        submitting; Seerr tells Sonarr to monitor only those.
+      - Admin-only "first season only" restriction is available if that policy is
+        wanted; JellyBridge plugin adds "Request Only First Season"; Shortlist can
+        cap seasons. Manual selection is the simplest and matches the request.
+      - Note: Sonarr must be wired up first (P3 item) for any of this to grab.
+
 
 - [ ] **Deployment topologies — a non-VM install is allowed (owner, 2026-11-20).**
       `media-vm` must stop being mandatory: a single host running the same
