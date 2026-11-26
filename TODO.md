@@ -459,6 +459,13 @@ qBt API key) to that same harvest when Phase 6 starts. Never echo values.
 
 ## Done (for context)
 
+- [x] **Phase 5 — COMPLETE (2026-11-26).** All §10g done criteria satisfied:
+      requested movie downloaded, hardlinked, playable in Jellyfin; family UI
+      trusted on devices; Jellyseerr requests working; peer health green
+      (AirVPN test-open on 37686, Connected not Firewalled). Only passive
+      proofs (next real grab) and deferred-by-choice items (FlareSolverr,
+      Sonarr/Lidarr, flat-host topology, Phase 6) remain.
+
 - [x] 2026-11-16 — fix 56 applied live; port `37686` + `Session\Port` + netns
       listener green; AirVPN forward open TCP+UDP.
 - [x] 2026-11-16 — Jellyfin wizard claimed; Jellyseerr ↔ Jellyfin sign-in fixed.

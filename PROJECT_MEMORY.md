@@ -5,8 +5,8 @@
 > costs 30 seconds and prevents a multi-hour hunt through codecs, transcoding and
 > firewall rules for a failure that never reaches the server.
 
-Last Updated: 2026-11-18 (Phase 5 fix 58: Jellyfin 12.4 pin + stepped DB migration — APPLIED and live-green)
-Current Phase: Phase 5 (KVM media-vm + media stack) — Phase 0–4 Completed & Signed Off; Phase 5 applied and live-green incl. fix 58 (`apply VERIFY_FAILS=0`, `diag VERIFY_FAILS=0`, server reports `12.4.0`); pending: mandatory full library scan + TV playback re-test + family-facing items (Step 10)
+Last Updated: 2026-11-26 (Phase 5 COMPLETE — all §10g done criteria satisfied: AirVPN test-open green on 37686, peer health closed, family-facing done, qBt password permanent, library scan run, TV playback confirmed on 12.1.wgt)
+Current Phase: Phase 5 (KVM media-vm + media stack) — COMPLETE & Signed Off; Phase 6 (Hermes request notifications) is the next phase
 
 ## 1. Host Environment Confirmed
 - **Hostname**: `clawbox` (Pulcro.io TurnKey Node TK-Node 1.1)
