@@ -175,9 +175,10 @@ Details: manual **Step 10** (10a–10i).
 - [ ] **Family-facing** (10e): CA import, Jellyfin users, Jellyseerr user import
       + permissions (Request on / Auto-Approve off), Application URL
       `https://192.168.1.133:8443`, Jellyfin server name, TV + Music libraries.
-- [ ] **§5 peer-health check** (`phase5_fix52_plan.md`): AirVPN test-open green
-      on both rows, qBt `Connected` not `Firewalled`, established peers; record
-      in `PROJECT_MEMORY.md`. Overdue since 2026-11-16.
+- [x] **§5 peer-health check** (`phase5_fix52_plan.md`): AirVPN test-open **green** on
+      port 37686 (2026-11-26), qBt `Connected` (not `Firewalled`), DHT 300 nodes,
+      listening port 37686, UPnP/NAT-PMP off, category path on disk. Established-peer
+      proof remains passive (next real download). Closed.
 
 ## P2 — FlareSolverr (deferred by choice, apply-tracked)
 
