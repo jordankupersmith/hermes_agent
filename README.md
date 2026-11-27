@@ -20,19 +20,21 @@ each awkward decision was made.
 | 2 | `media-vm` provisioning | done |
 | 3 | Local AI service (LiteLLM pin, model routing) | done |
 | 4 | Hermes agent (pinned commit + manifest) | done |
-| 5 | Media stack: Jellyfin, Jellyseerr, Radarr, Prowlarr, qBittorrent behind gluetun | **live** |
-| 6–9 | Planned | not started |
+| 5 | Media stack: Jellyfin, Jellyseerr, Radarr, Prowlarr, qBittorrent behind gluetun | **done** |
+| 6 | Python Telegram front-door & media extraction pipeline (`/opt/media-assistant`) | not started |
+| 7 | End-to-end integration testing & operational runbook | not started |
+| 8 | Documentation, backup & private GitHub deployment | in progress |
 
-Phase 5 is the part under active work: Jellyfin `12.4` for the Tizen client,
-Bazarr `1.5.6` for Latin-American Spanish subtitles, and a normalizer that
-rewrites every title to one audio track / zero embedded subtitles before it is
-served.
+Phase 5 is complete — Jellyfin `12.4` for the Tizen client, Bazarr `1.5.6` for
+Latin-American Spanish subtitles, and a normalizer that rewrites every title to
+one audio track / Spanish-only subtitles before it is served. See
+`QUICKSTART.md` for a step-by-step deployment guide.
 
 ## Layout
 
 | File | Role |
 | --- | --- |
-| `AGENTS.md` | Rules an agent (or a human in a hurry) must follow before touching the media stack. Start here. |
+| `QUICKSTART.md` | Step-by-step deployment guide. Pull the repo and tell your LLM to read and execute it. |
 | `PROJECT_MEMORY.md` | The decision log. Numbered **fixes** (55–66 in phase 5) with symptom, root cause, evidence and lesson, plus the version-pairing invariant (§2a). |
 | `phase5_manual_steps.md` | The operator runbook for phase 5 (Step 10 is the first-run / day-2 book). |
 | `TODO.md` / `RESUME.md` | Backlog and the one-screen handoff that a fresh session reads first. |
@@ -45,22 +47,11 @@ served.
 
 ## Quick start
 
-The scripts assume two machines in the same model as the original:
-
-- a **host** (`clawbox` in the docs) with libvirt and the media storage LV;
-- a **guest** `media-vm` at `192.168.122.10`, reachable from the host with a
-  dedicated deploy key (`/etc/media-vm/deploy_ed25519`, root-owned);
-- root on the host for the apply/diag scripts.
-
-The guest is the topology of record, **not a requirement**: a single-host
-install is supported as long as qBittorrent still has no network identity of its
-own (it shares gluetun's namespace), the VPN kill switch is proven with the
-tunnel down, admin ports are never on the LAN, and the firewall guards are
-carried over to the host. The VM adds a boundary, snapshots and a separate SSH
-key layer — defence-in-depth, not the property that keeps torrent traffic off
-the ISP link. See `TODO.md` → "Deployment topologies" for the acceptance list.
+See **`QUICKSTART.md`** for the full step-by-step deployment guide. The short
+version:
 
 ```bash
+git clone git@github.com:jordankupersmith/hermes_agent.git SystemBuild
 cd SystemBuild
 bash phase5_guardrail_test.sh          # offline gate: want VERIFY_FAILS=0
 sudo bash phase5_step1_install.sh      # install canonical root-owned copies
@@ -68,17 +59,9 @@ sudo bash /usr/local/sbin/phase5/phase5_apply.sh    # apply, idempotent
 sudo bash /usr/local/sbin/phase5/phase5_diag.sh     # read-only diagnostics
 ```
 
-Then follow `phase5_manual_steps.md` Step 10 for the parts that need a human:
-the Jellyfin wizard, the first request, the qBittorrent WebUI password, and the
-subtitle policy.
+Then follow `phase5_manual_steps.md` Step 10 for the parts that need a human.
 
-Day-2 examples:
-
-```bash
-sudo bash library_status.sh "some title"     # request -> Radarr -> qBt -> disk -> Jellyfin
-sudo bash bazarr_status.sh                   # profile, providers, jobs, log
-sudo bash check_normalize.sh                 # normalizer units + live stream counts
-```
+See `QUICKSTART.md` for the full topology, safety rules, and day-2 helpers.
 
 ## Safety model (do not "fix" these)
 
