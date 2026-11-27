@@ -1,15 +1,33 @@
 # SystemBuild — a reproducible home media + local-AI stack
 
-This repository is the build of a self-hosted "home datacenter": a KVM guest
-(`media-vm`) running a Docker Compose media stack, on a hardened Ubuntu host,
-plus a local AI phase. It is written as **runbooks plus fail-closed scripts**,
-not as a pile of copy-pasted commands: every phase has an apply script, a
-diagnostic script and a guardrail test, and every mistake found on the live
-system is recorded with its cause and its regression test.
+## What this is
 
-The point of the project is that someone else can follow the same phases on
-their own hardware and end up with the same result — including knowing **why**
-each awkward decision was made.
+This repository is a reproducible build of a self-hosted home datacenter on a
+single Ubuntu host: a KVM guest (`media-vm`) running a Docker Compose media stack
+(Jellyfin, Jellyseerr, Radarr, Sonarr, Prowlarr, Lidarr, Bazarr, qBittorrent
+behind a gluetun VPN kill switch), plus a local AI phase (LiteLLM proxy +
+Hermes agent). It is written as **runbooks plus fail-closed scripts**, not a pile
+of copy-pasted commands — every phase has an apply script, a diagnostic script,
+and a guardrail test, and every mistake found on the live system is recorded with
+its cause and regression test.
+
+**Completed (Phases 0–5):** host hardening, storage provisioning, user isolation,
+LiteLLM proxy, Hermes agent, KVM guest provisioning, the full media stack with VPN
+kill switch, Jellyfin 12.4 upgrade, Latin-American Spanish subtitle policy,
+media normalizer (one audio track / Spanish-only subtitles), qBittorrent
+integration, and all family-facing items (CA import, Jellyfin users, Jellyseerr
+requests, TV playback). The stack is operationally live and all §10g done
+criteria are satisfied.
+
+**Not yet started (Phases 6–8):** Phase 6 — Python Telegram front-door and media
+extraction pipeline (`/opt/media-assistant`) with request-state notifications;
+Phase 7 — end-to-end integration testing and operational runbook; Phase 8 —
+documentation, backup, and private GitHub deployment. These are planned and
+specified but not implemented.
+
+The point of the project is that someone else can follow the same phases on their
+own hardware and end up with the same result — including knowing **why** each
+awkward decision was made.
 
 ## Status
 
