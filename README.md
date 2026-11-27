@@ -65,16 +65,18 @@ one audio track / Spanish-only subtitles before it is served. See
 
 ## Quick start
 
-See **`QUICKSTART.md`** for the full step-by-step deployment guide. The short
-version:
+See **`QUICKSTART.md`** for the full step-by-step deployment guide (Phases 0–5).
+The short version:
 
 ```bash
 git clone git@github.com:jordankupersmith/hermes_agent.git SystemBuild
 cd SystemBuild
-bash phase5_guardrail_test.sh          # offline gate: want VERIFY_FAILS=0
-sudo bash phase5_step1_install.sh      # install canonical root-owned copies
-sudo bash /usr/local/sbin/phase5/phase5_apply.sh    # apply, idempotent
-sudo bash /usr/local/sbin/phase5/phase5_diag.sh     # read-only diagnostics
+# Phases 0-4: host hardening, user isolation, LiteLLM, Hermes
+sudo bash phase1_apply.sh && sudo bash phase3_apply.sh && sudo bash phase3_diag.sh
+sudo bash phase4_apply.sh && sudo bash phase4_diag.sh
+# Phase 5: media stack
+bash phase5_guardrail_test.sh && sudo bash phase5_step1_install.sh
+sudo bash /usr/local/sbin/phase5/phase5_apply.sh && sudo bash /usr/local/sbin/phase5/phase5_diag.sh
 ```
 
 Then follow `phase5_manual_steps.md` Step 10 for the parts that need a human.
