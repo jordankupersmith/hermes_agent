@@ -65,6 +65,11 @@ one audio track / Spanish-only subtitles before it is served. See
 
 ## Quick start
 
+> **Using an LLM?** Tell your agent to read and execute `QUICKSTART.md` in
+> planning mode with a high-parameter model (e.g. `opencode-go/kimi-k3.1-pro#max`
+> or `opencode-go/gemini-4-argon#high`). The file is written as a step-by-step
+> runbook that an agent can follow top-to-bottom.
+
 See **`QUICKSTART.md`** for the full step-by-step deployment guide (Phases 0–5).
 The short version:
 
