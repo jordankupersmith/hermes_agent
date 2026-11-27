@@ -1,4 +1,4 @@
-# Quick Start — SystemBuild Phase 5 (Media Stack)
+# Quick Start — SystemBuild (all phases)
 
 > **For an AI agent or a human operator:** read this file top-to-bottom and execute
 > each step in order. Every command is idempotent and fail-closed. Stop and report
@@ -15,6 +15,34 @@
 ```bash
 git clone git@github.com:jordankupersmith/hermes_agent.git SystemBuild
 cd SystemBuild
+```
+
+### Phases 0–4 (host baseline, VM, AI stack)
+
+Run these in order. Each is idempotent and fail-closed:
+
+```bash
+# Phase 0 — host inspection (read-only)
+sudo bash phase0_inspect.sh
+
+# Phase 1 — host hardening (SSH, UFW, 90G LVM)
+sudo bash phase1_apply.sh
+
+# Phase 2 — user isolation (litellm, hermes, mediabot)
+sudo bash phase2_apply.sh
+
+# Phase 3 — LiteLLM proxy
+sudo bash phase3_apply.sh
+sudo bash phase3_diag.sh          # want VERIFY_FAILS=0
+
+# Phase 4 — Hermes agent
+sudo bash phase4_apply.sh
+sudo bash phase4_diag.sh          # want VERIFY_FAILS=0
+```
+
+### Phase 5 — Media stack (the big one)
+
+```bash
 bash phase5_guardrail_test.sh          # offline gate: want VERIFY_FAILS=0
 ```
 
